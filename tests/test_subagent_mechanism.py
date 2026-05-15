@@ -138,7 +138,7 @@ class TestAgentRunAsSubagent:
         """测试只读工具过滤"""
         llm = HelloAgentsLLM(provider="openai", model="gpt-3.5-turbo")
         # 禁用 skills 和 subagent 自动注册
-        config = Config(subagent_enabled=False, skills_enabled=False)
+        config = Config(subagent_enabled=False, skills_enabled=False, todowrite_enabled=False, devlog_enabled=False)
 
         # 创建工具注册表
         registry = ToolRegistry()
@@ -170,7 +170,7 @@ class TestAgentRunAsSubagent:
         """测试完全访问过滤器"""
         llm = HelloAgentsLLM(provider="openai", model="gpt-3.5-turbo")
         # 禁用 skills 和 subagent 自动注册
-        config = Config(subagent_enabled=False, skills_enabled=False)
+        config = Config(subagent_enabled=False, skills_enabled=False, todowrite_enabled=False, devlog_enabled=False)
 
         registry = ToolRegistry()
         registry.register_tool(MockReadTool())

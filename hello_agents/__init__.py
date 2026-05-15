@@ -25,10 +25,36 @@ from .agents.simple_agent import SimpleAgent
 from .agents.react_agent import ReActAgent
 from .agents.reflection_agent import ReflectionAgent
 from .agents.plan_solve_agent import PlanSolveAgent
+PlanAndSolveAgent = PlanSolveAgent  # 向后兼容别名
 
 # 工具系统
 from .tools.registry import ToolRegistry, global_registry
 from .tools.builtin.calculator import CalculatorTool, calculate
+
+# Embedding 和 Storage（轻量，直接导入）
+from .embedding import (
+    EmbeddingModel,
+    LocalTransformerEmbedding,
+    TFIDFEmbedding,
+    create_embedding_model,
+    create_embedding_model_with_fallback,
+    get_text_embedder,
+    get_dimension,
+)
+from .storage import QdrantVectorStore, QdrantConnectionManager
+
+
+def get_rag_pipeline():
+    """获取 RAG Pipeline 工厂函数（延迟导入，避免强制依赖 Qdrant/sentence-transformers）"""
+    from .rag import create_rag_pipeline
+    return create_rag_pipeline
+
+
+def get_mcp():
+    """获取 MCP Client/Server 类（延迟导入，避免强制依赖 fastmcp）"""
+    from .mcp import MCPClient, MCPServer
+    return MCPClient, MCPServer
+
 
 __all__ = [
     # 版本信息
@@ -48,11 +74,31 @@ __all__ = [
     "ReActAgent",
     "ReflectionAgent",
     "PlanSolveAgent",
+    "PlanAndSolveAgent",  # 向后兼容
 
     # 工具系统
     "ToolRegistry",
     "global_registry",
     "CalculatorTool",
     "calculate",
+
+    # Embedding
+    "EmbeddingModel",
+    "LocalTransformerEmbedding",
+    "TFIDFEmbedding",
+    "create_embedding_model",
+    "create_embedding_model_with_fallback",
+    "get_text_embedder",
+    "get_dimension",
+
+    # Storage
+    "QdrantVectorStore",
+    "QdrantConnectionManager",
+
+    # RAG (lazy)
+    "get_rag_pipeline",
+
+    # MCP (lazy)
+    "get_mcp",
 ]
 
