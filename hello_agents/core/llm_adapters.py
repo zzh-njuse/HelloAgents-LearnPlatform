@@ -308,12 +308,17 @@ class OpenAIAdapter(BaseLLMAdapter):
                     "total_tokens": response.usage.total_tokens
                 }
 
+            reasoning_content = None
+            if hasattr(message, 'reasoning_content') and message.reasoning_content:
+                reasoning_content = message.reasoning_content
+
             return LLMToolResponse(
                 content=message.content,
                 tool_calls=tool_calls,
                 model=response.model,
                 usage=usage,
-                latency_ms=latency_ms
+                latency_ms=latency_ms,
+                reasoning_content=reasoning_content,
             )
 
         except Exception as e:

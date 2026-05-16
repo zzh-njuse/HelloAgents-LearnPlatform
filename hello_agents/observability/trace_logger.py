@@ -66,6 +66,7 @@ class TraceLogger:
         
         # 打开 HTML 文件（增量写入）
         self.html_file = open(self.html_path, 'w', encoding='utf-8')
+        self._finalized = False
         
         # 写入 HTML 头部
         self._write_html_header()
@@ -87,12 +88,18 @@ class TraceLogger:
         step: Optional[int] = None
     ):
         """记录事件
-        
+
         Args:
             event: 事件类型（session_start, tool_call, tool_result, etc.）
             payload: 事件数据
             step: ReAct 循环的步骤序号（可选）
         """
+        # 如果上次已 finalize，重新打开文件（支持多轮 run）
+        if getattr(self, '_finalized', False):
+            self._finalized = False
+            self.jsonl_file = open(self.jsonl_path, 'a', encoding='utf-8')
+            self.html_file = open(self.html_path, 'a', encoding='utf-8')
+
         # 构造事件对象
         event_obj = {
             "ts": datetime.now().isoformat(),
@@ -176,6 +183,7 @@ class TraceLogger:
         # 关闭文件
         self.jsonl_file.close()
         self.html_file.close()
+        self._finalized = True
 
         print(f"✅ Trace 已保存:")
         print(f"   JSONL: {self.jsonl_path}")

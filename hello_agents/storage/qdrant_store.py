@@ -21,18 +21,18 @@ class QdrantConnectionManager:
 
     _instance: Optional["QdrantConnectionManager"] = None
 
-    def __new__(cls):
+    def __new__(cls, url: str = None, api_key: str = None):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self):
+    def __init__(self, url: str = None, api_key: str = None):
         if self._initialized:
             return
         self._initialized = True
-        self._url = os.environ.get("QDRANT_URL", "http://localhost:6333")
-        self._api_key = os.environ.get("QDRANT_API_KEY")
+        self._url = url or os.environ.get("QDRANT_URL", "http://localhost:6333")
+        self._api_key = api_key or os.environ.get("QDRANT_API_KEY")
         self._client = None
 
     @property
@@ -79,8 +79,15 @@ class QdrantVectorStore:
         ... )
     """
 
-    def __init__(self):
-        self._conn = QdrantConnectionManager()
+    def __init__(
+        self,
+        url: str = None,
+        api_key: str = None,
+        collection_name: str = "hello_agents_rag_vectors",
+        vector_size: int = None,
+        distance: str = "cosine",
+    ):
+        self._conn = QdrantConnectionManager(url=url, api_key=api_key)
 
     @property
     def client(self):
@@ -155,25 +162,20 @@ class QdrantVectorStore:
         self,
         query_vector: List[float],
         top_k: int = 8,
+        limit: int = None,  # 兼容旧 API (alias for top_k)
+        where: Dict[str, Any] = None,  # 兼容旧 API (alias for filter_conditions)
         filter_conditions: Optional[Dict[str, Any]] = None,
         score_threshold: Optional[float] = None,
         collection_name: str = "hello_agents_rag_vectors",
     ) -> List[Dict[str, Any]]:
-        """相似向量搜索
-
-        Args:
-            query_vector: 查询向量
-            top_k: 返回结果数
-            filter_conditions: Qdrant 过滤条件（可选）
-            score_threshold: 最低分数阈值（可选）
-            collection_name: 搜索的集合
-
-        Returns:
-            结果列表，每项包含 id, score, metadata
-        """
+        """相似向量搜索"""
+        if limit is not None:
+            top_k = limit
+        if where is not None:
+            filter_conditions = where
         search_kwargs = {
             "collection_name": collection_name,
-            "query_vector": query_vector,
+            "query": query_vector,
             "limit": top_k,
         }
         if filter_conditions:
@@ -181,7 +183,7 @@ class QdrantVectorStore:
         if score_threshold is not None:
             search_kwargs["score_threshold"] = score_threshold
 
-        results = self.client.search(**search_kwargs)
+        results = self.client.query_points(**search_kwargs)
 
         return [
             {
@@ -189,7 +191,7 @@ class QdrantVectorStore:
                 "score": hit.score,
                 "metadata": hit.payload or {},
             }
-            for hit in results
+            for hit in results.points
         ]
 
     def get_collection_stats(self, collection_name: str = "hello_agents_rag_vectors") -> Dict[str, Any]:

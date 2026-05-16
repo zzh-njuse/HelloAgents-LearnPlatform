@@ -238,7 +238,7 @@ class ReActAgent(Agent):
                 return final_answer
 
             # 将助手消息添加到历史
-            messages.append({
+            assistant_msg = {
                 "role": "assistant",
                 "content": response.content,
                 "tool_calls": [
@@ -252,7 +252,11 @@ class ReActAgent(Agent):
                     }
                     for tc in tool_calls
                 ]
-            })
+            }
+            # 保留 reasoning_content（thinking model 需要回传）
+            if getattr(response, 'reasoning_content', None):
+                assistant_msg["reasoning_content"] = response.reasoning_content
+            messages.append(assistant_msg)
 
             # 执行所有工具调用
             for tool_call in tool_calls:

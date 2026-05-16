@@ -104,3 +104,7 @@ class LocalTransformerEmbedding(EmbeddingModel):
     def clear_cache(self):
         """清空缓存"""
         self._cache.clear()
+
+    def encode(self, texts, **kwargs):
+        """alias for embed() — compatibility with sentence-transformers API"""
+        return self.embed(texts)

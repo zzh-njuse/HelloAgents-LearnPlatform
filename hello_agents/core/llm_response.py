@@ -20,6 +20,7 @@ class LLMToolResponse:
     model: str
     usage: Dict[str, int] = field(default_factory=dict)
     latency_ms: int = 0
+    reasoning_content: Optional[str] = None
 
 
 @dataclass

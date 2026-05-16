@@ -82,10 +82,13 @@ def get_text_embedder() -> EmbeddingModel:
     return _global_embedder
 
 
-def get_dimension() -> int:
+def get_dimension(default: int = 384) -> int:
     """获取当前全局 embedder 的向量维度
 
-    Returns:
-        向量维度
+    Args:
+        default: 全局 embedder 未初始化时的默认维度
     """
-    return get_text_embedder().dimension
+    try:
+        return get_text_embedder().dimension
+    except Exception:
+        return default
