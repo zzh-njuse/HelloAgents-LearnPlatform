@@ -163,4 +163,5 @@ cython_debug/
 .venv
 
 # 运行时生成数据（traces, sessions, todos）
-memory/
+/memory/
+/memory_data/

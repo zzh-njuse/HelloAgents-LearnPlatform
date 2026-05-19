@@ -44,7 +44,7 @@ class ToolRegistry:
                     if sub_tool.name in self._tools:
                         print(f"⚠️ 警告：工具 '{sub_tool.name}' 已存在，将被覆盖。")
                     self._tools[sub_tool.name] = sub_tool
-                print(f"✅ 工具 '{tool.name}' 已展开为 {len(expanded_tools)} 个独立工具")
+                print(f"[OK] Tool '{tool.name}' expanded to {len(expanded_tools)} sub-tools")
                 return
 
         # 普通工具或不展开的工具
@@ -52,7 +52,7 @@ class ToolRegistry:
             print(f"⚠️ 警告：工具 '{tool.name}' 已存在，将被覆盖。")
 
         self._tools[tool.name] = tool
-        print(f"✅ 工具 '{tool.name}' 已注册。")
+        print(f"[OK] Tool '{tool.name}' registered.")
 
     def register_function(
         self,
@@ -107,7 +107,7 @@ class ToolRegistry:
             "description": description,
             "func": func
         }
-        print(f"✅ 函数工具 '{name}' 已注册。")
+        print(f"[OK] Function tool '{name}' registered.")
 
     def unregister(self, name: str):
         """注销工具"""

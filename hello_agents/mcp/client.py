@@ -197,11 +197,9 @@ class MCPClient:
 
     async def __aenter__(self):
         """异步上下文管理器入口"""
-        print("🔗 连接到 MCP 服务器...")
         self.client = Client(self.server_source)
         self._context_manager = self.client
         await self._context_manager.__aenter__()
-        print("✅ 连接成功！")
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -210,7 +208,6 @@ class MCPClient:
             await self._context_manager.__aexit__(exc_type, exc_val, exc_tb)
             self.client = None
             self._context_manager = None
-        print("🔌 连接已断开")
 
     async def list_tools(self) -> List[Dict[str, Any]]:
         """列出所有可用的工具"""

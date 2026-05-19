@@ -279,50 +279,71 @@ class OpenAIAdapter(BaseLLMAdapter):
             self._client = self.create_client()
 
         start_time = time.time()
-        try:
-            response = self._client.chat.completions.create(
+
+        def _call_with_tool_choice(tc):
+            return self._client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 tools=tools,
-                tool_choice=tool_choice,
+                tool_choice=tc,
                 **kwargs
             )
 
-            latency_ms = int((time.time() - start_time) * 1000)
-            message = response.choices[0].message
+        # Reasoning models (deepseek-reasoner, o1, o3) reject forced tool_choice.
+        # Cascade: dict → "required" → "auto"
+        # When only one tool is registered, all three are semantically equivalent.
+        tool_choice_options = [tool_choice]
+        if isinstance(tool_choice, dict):
+            tool_choice_options = [tool_choice, "required", "auto"]
 
-            tool_calls = []
-            if message.tool_calls:
-                for tc in message.tool_calls:
-                    tool_calls.append(ToolCall(
-                        id=tc.id,
-                        name=tc.function.name,
-                        arguments=tc.function.arguments
-                    ))
+        last_error = None
+        for tc in tool_choice_options:
+            try:
+                response = _call_with_tool_choice(tc)
+                break
+            except Exception as e:
+                last_error = e
+                if "does not support this tool_choice" not in str(e):
+                    raise HelloAgentsException(
+                        f"OpenAI Function Calling调用失败: {str(e)}"
+                    ) from e
+        else:
+            raise HelloAgentsException(
+                f"OpenAI Function Calling调用失败 (所有 tool_choice 选项均失败): {str(last_error)}"
+            ) from last_error
 
-            usage = {}
-            if response.usage:
-                usage = {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens
-                }
+        latency_ms = int((time.time() - start_time) * 1000)
+        message = response.choices[0].message
 
-            reasoning_content = None
-            if hasattr(message, 'reasoning_content') and message.reasoning_content:
-                reasoning_content = message.reasoning_content
+        tool_calls = []
+        if message.tool_calls:
+            for tc in message.tool_calls:
+                tool_calls.append(ToolCall(
+                    id=tc.id,
+                    name=tc.function.name,
+                    arguments=tc.function.arguments
+                ))
 
-            return LLMToolResponse(
-                content=message.content,
-                tool_calls=tool_calls,
-                model=response.model,
-                usage=usage,
-                latency_ms=latency_ms,
-                reasoning_content=reasoning_content,
-            )
+        usage = {}
+        if response.usage:
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens
+            }
 
-        except Exception as e:
-            raise HelloAgentsException(f"OpenAI Function Calling调用失败: {str(e)}")
+        reasoning_content = None
+        if hasattr(message, 'reasoning_content') and message.reasoning_content:
+            reasoning_content = message.reasoning_content
+
+        return LLMToolResponse(
+            content=message.content,
+            tool_calls=tool_calls,
+            model=response.model,
+            usage=usage,
+            latency_ms=latency_ms,
+            reasoning_content=reasoning_content,
+        )
 
 
 class AnthropicAdapter(BaseLLMAdapter):

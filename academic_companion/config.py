@@ -43,6 +43,36 @@ class MemoryConfig:
 
 
 @dataclass
+class MCPConfig:
+    """MCP 协议配置"""
+    arxiv_server_module: str = "arxiv_search_mcp"
+    semantic_scholar_server_module: str = "semantic_scholar_mcp"
+    search_max_results: int = 20
+    request_timeout: int = 30
+    semantic_scholar_api_key: Optional[str] = field(
+        default_factory=lambda: os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+    )
+
+
+@dataclass
+class ResearchNotesConfig:
+    """研究笔记配置"""
+    persistence_dir: str = "memory/research"
+    notes_file: str = "memory/research/notes.json"
+    qdrant_collection: str = "research_notes"
+    vector_top_k: int = 10
+    similarity_threshold: float = 0.5
+
+
+@dataclass
+class ResearchModeConfig:
+    """研究模式 Agent 配置"""
+    temperature: float = 0.3
+    max_steps: int = 10
+    subagent_max_steps: int = 6
+
+
+@dataclass
 class AcademicConfig:
     """学术 AI 伙伴总配置"""
 
@@ -79,6 +109,9 @@ class AcademicConfig:
     rag: RAGConfig = field(default_factory=RAGConfig)
     learning: LearningModeConfig = field(default_factory=LearningModeConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    mcp: MCPConfig = field(default_factory=MCPConfig)
+    research: ResearchModeConfig = field(default_factory=ResearchModeConfig)
+    research_notes: ResearchNotesConfig = field(default_factory=ResearchNotesConfig)
 
 
 # 全局单例

@@ -61,15 +61,17 @@ class LocalTransformerEmbedding(EmbeddingModel):
         # 兜底：尝试加载模型获取维度
         return self.model.get_sentence_embedding_dimension()
 
-    def embed(self, texts: List[str]) -> List[List[float]]:
+    def embed(self, texts) -> List[List[float]]:
         """将文本列表转换为向量列表
 
         Args:
-            texts: 文本列表
+            texts: 文本列表或单个字符串
 
         Returns:
             向量列表，每个向量为 float 列表
         """
+        if isinstance(texts, str):
+            texts = [texts]
         if not texts:
             return []
 

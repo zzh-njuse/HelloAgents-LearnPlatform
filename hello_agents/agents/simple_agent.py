@@ -177,7 +177,7 @@ class SimpleAgent(Agent):
                 break
 
             # 将助手消息添加到历史
-            messages.append({
+            assistant_msg = {
                 "role": "assistant",
                 "content": response.content,
                 "tool_calls": [
@@ -191,7 +191,10 @@ class SimpleAgent(Agent):
                     }
                     for tc in tool_calls
                 ]
-            })
+            }
+            if response.reasoning_content:
+                assistant_msg["reasoning_content"] = response.reasoning_content
+            messages.append(assistant_msg)
 
             # 执行所有工具调用
             for tool_call in tool_calls:

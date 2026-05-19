@@ -169,6 +169,8 @@ Phase 2 中 `hello_agents/` 框架代码实际行的修改：
 
 **解决**: 重写 `RAGRetrievalTool` 的检索逻辑，绕开 pipeline 的 `search_vectors_expanded`，直接使用 `QdrantVectorStore.search_similar()` 进行查询，不添加任何 filter
 
+> **Phase 3 补充** (2026-05-19): Memory 子系统迁移时遇到同一问题——EpisodicMemory 和 SemanticMemory 的 where filter 含未声明字段 `memory_type`。修复方式相同：去掉 Qdrant 层 filter，改应用层过滤。
+
 ---
 
 ## 问题 9: Thinking Model 的 `reasoning_content` 未回传
@@ -184,6 +186,8 @@ Phase 2 中 `hello_agents/` 框架代码实际行的修改：
 - `llm_response.py`: `LLMToolResponse` 添加 `reasoning_content: Optional[str] = None`
 - `llm_adapters.py`: `OpenAIAdapter.invoke_with_tools` 提取 `message.reasoning_content`
 - `react_agent.py`: assistant 消息字典中条件性添加 `reasoning_content`
+
+> **Phase 3 补充** (2026-05-19): 此问题只修了 ReActAgent，PlanSolveAgent.Executor、ReflectionAgent、SimpleAgent 的函数调用循环有同样遗漏。Phase 3 补修了 3 处：`plan_solve_agent.py`、`reflection_agent.py`、`simple_agent.py` 中构建 assistant 消息的逻辑。
 
 ---
 
@@ -261,9 +265,19 @@ Phase 2 中 `hello_agents/` 框架代码实际行的修改：
 
 ---
 
-## 后续待办
+## Phase 3 改造 (2026-05-19)
+
+### Memory 系统集成
+- [x] LearningAgent 接入 `MemoryManager`（Working + Episodic + Semantic） ✅
+- [x] 替换 DevLogTool 为 EpisodicMemory（每次学习存为 episode） ✅
+- [x] UserModel 保留，负责掌握度追踪 + 间隔重复 ✅
+- [x] System prompt 增加 MemoryManager 检索结果注入 ✅
+
+### 后续待办
 
 - [x] CLI demo 端到端验证 (`demo_learning.py`) ✅
+- [ ] **掌握度评估优化**: 当前用 `min(70, 40 + len(answer)/100)` 按回答长度评分的占位逻辑，应接入 LLM 精确评估
+- [ ] **多模态/图片支持**: RAG 有 ImageDocument 数据模型但无处理逻辑；PerceptualMemory 设计支持多模态但未启用
 - [ ] LeetCode 全量 2913 题摄入（当前只摄入了 500 题）
 - [ ] bge 模型路径配置化（当前硬编码在 `run_ingestion.py` 中）
 - [ ] `run_ingestion.py` 中的直接文本切分替换为 pipeline 的 `_split_paragraphs_with_headings`

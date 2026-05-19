@@ -56,6 +56,12 @@ def get_mcp():
     return MCPClient, MCPServer
 
 
+def get_memory_manager():
+    """获取 MemoryManager（延迟导入，避免强制依赖 Neo4j/Qdrant）"""
+    from .memory import MemoryManager
+    return MemoryManager
+
+
 __all__ = [
     # 版本信息
     "__version__",
@@ -100,5 +106,8 @@ __all__ = [
 
     # MCP (lazy)
     "get_mcp",
+
+    # Memory (lazy)
+    "get_memory_manager",
 ]
 

@@ -52,22 +52,33 @@ class ContextConfig:
 class ContextBuilder:
     """上下文构建器 - GSSC流水线
 
-    注意：MemoryTool 和 RAGTool 已被移除，此类暂时不可用
-
-    用法示例：
+    Memory 和 RAG 通过 additional_packets 注入：
     ```python
-    builder = ContextBuilder(
-        config=ContextConfig(max_tokens=8000)
-    )
+    builder = ContextBuilder(config=ContextConfig(max_tokens=8000))
+
+    # 从 MemoryManager 检索相关记忆
+    mem_mgr = MemoryManager()
+    memories = mem_mgr.retrieve_memories(query)
+    mem_packets = [
+        ContextPacket(content=m.content, metadata={"type": "related_memory"})
+        for m in memories
+    ]
+
+    # 从 RAG 检索知识库
+    rag_results = rag_pipeline.search(query)
+    rag_packets = [
+        ContextPacket(content=r, metadata={"type": "retrieval"})
+        for r in rag_results
+    ]
 
     context = builder.build(
-        user_query="用户问题",
-        conversation_history=[...],
-        system_instructions="系统指令"
+        user_query=query,
+        system_instructions=system_prompt,
+        conversation_history=history,
+        additional_packets=mem_packets + rag_packets,
     )
     ```
     """
-
     def __init__(
         self,
         config: Optional[ContextConfig] = None
@@ -133,8 +144,9 @@ class ContextBuilder:
                 metadata={"type": "instructions"}
             ))
 
-        # 注意：MemoryTool 和 RAGTool 已被移除
-        # 如需使用记忆和知识库功能，请自行实现
+        # P1/P2: Memory 和 RAG 通过 additional_packets 注入
+        # 由调用方负责检索（MemoryManager / RAG pipeline），
+        # 包装为 ContextPacket(type="related_memory" / "retrieval" / "knowledge_base") 传入
 
         # P3: 对话历史（辅助材料）
         if conversation_history:

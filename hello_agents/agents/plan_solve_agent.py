@@ -19,6 +19,7 @@ class Planner:
     def __init__(self, llm_client: HelloAgentsLLM, system_prompt: Optional[str] = None):
         self.llm_client = llm_client
         self.system_prompt = system_prompt or """你是一个顶级的AI规划专家。你的任务是将用户提出的复杂问题分解成一个由多个简单步骤组成的行动计划。
+你必须调用 generate_plan 函数来输出计划，不要用文字回复——只调用函数。
 请确保计划中的每个步骤都是一个独立的、可执行的子任务，并且严格按照逻辑顺序排列。"""
 
     def plan(self, question: str, **kwargs) -> List[str]:
@@ -210,7 +211,7 @@ class Executor:
                 return response.content or ""
 
             # 将助手消息添加到历史
-            messages.append({
+            assistant_msg = {
                 "role": "assistant",
                 "content": response.content,
                 "tool_calls": [
@@ -224,7 +225,10 @@ class Executor:
                     }
                     for tc in tool_calls
                 ]
-            })
+            }
+            if response.reasoning_content:
+                assistant_msg["reasoning_content"] = response.reasoning_content
+            messages.append(assistant_msg)
 
             # 执行所有工具调用
             for tool_call in tool_calls:

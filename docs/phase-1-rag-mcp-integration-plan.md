@@ -238,3 +238,14 @@ print(f'Search results: {len(results)} items')
 # 3. 现有测试无回归
 python -m pytest tests/ -x --timeout=60 -q
 ```
+
+---
+
+## Phase 3 补充 (2026-05-19)
+
+Phase 1 建立的 embedding/storage 共享层在 Phase 3 中进一步承载了 Memory 子系统：
+
+- `hello_agents/memory/` 从原框架删除的 hello_memory 代码中恢复并迁移（与 rag/ 迁移模式一致）
+- Memory 类型（Episodic/Semantic/Perceptual）使用 `hello_agents.embedding` 和 `hello_agents.storage.qdrant_store`，无重复
+- `QdrantConnectionManager` 添加了 `get_instance()` 兼容方法和连接超时
+- 相关修复：Windows GBK emoji、reasoner 模型 tool_choice cascade、reasoning_content 回传（3 处）

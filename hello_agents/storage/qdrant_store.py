@@ -27,6 +27,14 @@ class QdrantConnectionManager:
             cls._instance._initialized = False
         return cls._instance
 
+    @classmethod
+    def get_instance(cls, **kwargs) -> "QdrantConnectionManager":
+        """兼容 memory 模块的工厂方法"""
+        return cls(
+            url=kwargs.get("url"),
+            api_key=kwargs.get("api_key"),
+        )
+
     def __init__(self, url: str = None, api_key: str = None):
         if self._initialized:
             return
@@ -46,7 +54,7 @@ class QdrantConnectionManager:
                     "Qdrant client requires 'qdrant-client'. "
                     "Install it with: pip install qdrant-client"
                 )
-            kwargs = {"url": self._url}
+            kwargs = {"url": self._url, "timeout": int(os.environ.get("QDRANT_TIMEOUT", "30"))}
             if self._api_key:
                 kwargs["api_key"] = self._api_key
             self._client = QdrantClient(**kwargs)
@@ -99,7 +107,7 @@ class QdrantVectorStore:
         dimension: int,
         distance: str = "cosine",
     ) -> None:
-        """确保集合存在，不存在则创建
+        """确保集合存在且配置正确，配置不匹配则删除重建
 
         Args:
             collection_name: 集合名称
@@ -107,16 +115,40 @@ class QdrantVectorStore:
             distance: 距离度量 ("cosine" 或 "dot")
         """
         from qdrant_client.models import Distance, VectorParams
+        from qdrant_client.http.exceptions import UnexpectedResponse
+
+        dist = Distance.COSINE if distance == "cosine" else Distance.DOT
+        expected_size = dimension
 
         try:
-            self.client.get_collection(collection_name)
+            info = self.client.get_collection(collection_name)
+            actual_size = info.config.params.vectors.size
+            if actual_size is None:
+                # 无法读取维度（异常配置），删除重建
+                logger.info("Collection '%s' has no size, recreating", collection_name)
+                self.client.delete_collection(collection_name)
+            elif actual_size != expected_size:
+                logger.info("Collection '%s' dim mismatch (%d vs %d), recreating",
+                            collection_name, actual_size, expected_size)
+                self.client.delete_collection(collection_name)
+            else:
+                return  # 配置匹配，无需重建
+        except UnexpectedResponse as e:
+            if "Not Found" not in str(e) and "404" not in str(e):
+                raise
+            # 不存在 — 继续创建
         except Exception:
-            dist = Distance.COSINE if distance == "cosine" else Distance.DOT
-            self.client.create_collection(
-                collection_name=collection_name,
-                vectors_config=VectorParams(size=dimension, distance=dist),
-            )
-            logger.info("Created Qdrant collection '%s' (dim=%d, dist=%s)", collection_name, dimension, distance)
+            # 无法读取，删除重建
+            try:
+                self.client.delete_collection(collection_name)
+            except Exception:
+                pass
+
+        self.client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=dimension, distance=dist),
+        )
+        logger.info("Created Qdrant collection '%s' (dim=%d, dist=%s)", collection_name, dimension, distance)
 
     def add_vectors(
         self,
