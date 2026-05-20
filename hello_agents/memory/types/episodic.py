@@ -72,7 +72,7 @@ class EpisodicMemory(BaseMemory):
         self.doc_store = SQLiteDocumentStore(db_path=db_path)
 
         # 统一嵌入模型（多语言，默认384维）
-        self.embedder = get_text_embedder()
+        self.embedder = get_text_embedder("memory")
 
         # 向量存储 Qdrant
         from hello_agents.storage.qdrant_store import QdrantVectorStore

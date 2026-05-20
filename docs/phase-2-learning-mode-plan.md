@@ -276,8 +276,117 @@ Phase 2 中 `hello_agents/` 框架代码实际行的修改：
 ### 后续待办
 
 - [x] CLI demo 端到端验证 (`demo_learning.py`) ✅
-- [ ] **掌握度评估优化**: 当前用 `min(70, 40 + len(answer)/100)` 按回答长度评分的占位逻辑，应接入 LLM 精确评估
+- [x] **掌握度评估优化**: 当前用 `min(70, 40 + len(answer)/100)` 按回答长度评分的占位逻辑，应接入 LLM 精确评估 ✅ — 已实现 CSAssessor (LLM 出题+评分) + AlgorithmAssessor (LeetCode 匹配)
 - [ ] **多模态/图片支持**: RAG 有 ImageDocument 数据模型但无处理逻辑；PerceptualMemory 设计支持多模态但未启用
-- [ ] LeetCode 全量 2913 题摄入（当前只摄入了 500 题）
-- [ ] bge 模型路径配置化（当前硬编码在 `run_ingestion.py` 中）
-- [ ] `run_ingestion.py` 中的直接文本切分替换为 pipeline 的 `_split_paragraphs_with_headings`
+- [x] LeetCode 全量 2913 题摄入（当前只摄入了 500 题）✅ — 已摄入 2913 题到本地 Qdrant
+- [x] bge 模型路径配置化（当前硬编码在 `run_ingestion.py` 中）✅ — 已改为命名注册表 + `.env` 配置
+- [x] `run_ingestion.py` 中的直接文本切分替换为 pipeline 的 `_split_paragraphs_with_headings` ✅ — CS-Base 已走 `load_and_chunk_texts`
+- [x] Learning Agent 会话化 + GSSC 上下文管线 ✅ — ContextBuilder 四路组装(WorkingMemory+Episodic+Semantic+RAG)，支持多轮对话 + 章节进度
+- [x] Qdrant 本地部署 ✅ — Docker Desktop, D 盘存储, 数据 393MB
+
+---
+
+## 2026-05-20/21 实现详情
+
+### 1. BGE 模型路径配置化 + 命名注册表
+
+**改动**: `factory.py` 单例 → 命名注册表，支持多 embedder 共存。
+
+| 调用方式 | 环境变量 | 默认模型 | 维度 | 大小 | 用途 |
+|---------|---------|---------|------|------|------|
+| `get_text_embedder("rag")` | `EMBED_RAG_MODEL` | bge-large-zh-v1.5 | 1024 | 1.3GB | RAG 摄入+查询 |
+| `get_text_embedder("memory")` | `EMBED_MEMORY_MODEL` | bge-small-zh-v1.5 | 512 | 100MB | 记忆系统 |
+| `get_text_embedder()` | → `"default"` → `EMBED_RAG_MODEL` | 同 rag | | | 向后兼容 |
+
+**影响文件**: `factory.py`, `semantic.py`, `episodic.py`, `perceptual.py`, `research_notes.py`, `run_ingestion.py`, `.env`
+
+**注意**: bge-small 首次使用时会从 HF 镜像下载 (~100MB)，已配置 `HF_ENDPOINT=https://hf-mirror.com`。
+
+### 2. Learning Agent 会话化 + GSSC 上下文管线
+
+**问题根因**:
+- `ReActAgent._build_messages()` 不注入历史 → 每次 run() 空白对话
+- WorkingMemory 从未写入 → `_build_memory_context()` 永远返回"暂无历史记忆"
+- Episodic/Semantic 只写不读
+- `ContextBuilder` (GSSC) 已实现但无人使用
+
+**方案**: 每次 `run()` 前用 `ContextBuilder.build()` 组装四路上下文：
+1. **WorkingMemory** → `task_state` — 当前会话近期学习摘要
+2. **EpisodicMemory** → `related_memory` — 同章节历史学习事件
+3. **SemanticMemory** → `related_memory` — 知识图谱概念关联
+4. **RAG** → `retrieval` — 按章节 `source_dir` 过滤的知识库内容
+
+答完后写入 WorkingMemory (importance=0.7, 高于 consolidation_threshold=0.85, 确保不会被立即搬走)。
+
+**影响文件**:
+- `learning_agent.py`: 重写 `_build_messages()` + `_build_context()` + `_record_learning()`
+- `learning_session.py`: **新建** — 状态机 (IDLE→SELECTING→LEARNING→ASSESSING) + CLI 循环
+- `session_demo.py`: **新建** — 入口脚本
+- `user_model.py`: +ChapterProgress + _mastery_bar 可视化
+- `rag_tool.py`: +source_dir 参数 + Qdrant payload filter
+
+**CLI 命令**: `/select <mode>` `/progress` `/learn <id>` `/stop` `/status` `/help`
+
+**输出整洁化**: `agent.run()` 时 `contextlib.redirect_stdout/stderr` 捕获 ReAct 内部日志
+→ 写入 `memory/debug/agent_trace.log` → 用户只看最终回答。
+同时抑制 9 个模块的 INFO 日志 + TQDM/HF 进度条。
+
+**已知 bug — WorkingMemory 被立即清空**:
+`consolidate_memories(importance_threshold=0.7)` 在每次 `_record_learning()` 后触发。
+写入的 working memory 也是 importance=0.7, 刚好等于阈值, 立即被搬走。
+**修复**: 阈值提高到 0.85。
+
+### 3. 掌握度评估优化
+
+**方案**: 两种模式分开评测。
+
+**CS 八股** (`/stop` 触发):
+1. 收集章节信息 + WorkingMemory 摘要
+2. LLM 生成 3 道简答题 (含参考答案)
+3. 逐题展示 → 用户输入回答
+4. LLM 评估全部回答 → 分数 + 薄弱点 + 评语
+5. `UserModel.update_chapter_progress(real_score)`
+
+**算法** (`/stop` 触发):
+1. 根据章节 topics 匹配 2-3 道 LeetCode 题 (60% 有题解 + 40% 无题解)
+2. 展示题号 + 难度 + leetcode.cn 链接
+3. 用户去 LeetCode 完成 → 回报 y/n
+4. 通过率 → 掌握度
+5. `UserModel.update_chapter_progress(real_score)`
+
+**影响文件**: `assessor.py` (新建), `learning_session.py` (`stop_learning()` 重写)
+
+### 4. 全量数据摄入 — 踩坑记录
+
+**摄入规模**: CS-Base 880 chunks (109 个 md) + LeetCode 2913 chunks = 3793 总向量 (1024 维)。
+
+**坑 1: `_chunk_paragraphs` 死循环**
+当段落超 `chunk_tokens`(800) 且 overlap 重建后无法合并时, `i` 不前进 → 无限循环。
+测试: `how_to_lock.md` 276 段落 → 死循环产出 9770 微 chunk → 修复后 23 chunks。
+**修复两处** (pipeline.py):
+1. `p_tokens > chunk_tokens` 时直接强发, 跳过 else 分支
+2. overlap 重建后若同一段落仍无法合并, 强制发射 cur 并重置
+
+**坑 2: torch 版本**
+torch 2.5.1 太旧, `sentence-transformers` 报 CVE-2025-32434 安全漏洞限制。
+**修复**: `pip install torch>=2.6` → 2.12.0 (123MB)
+
+**坑 3: 内存不足**
+两个僵尸 Python 进程各占 ~10GB (前次失败摄入残留), 系统只剩 4GB 空闲 → MemoryError。
+**修复**: `Stop-Process -Name python -Force` → 释放回 23.7GB。
+
+**坑 4: `add_vectors` API**
+- `add_vectors()` 无返回值 (None), 但 `index_chunks()` 检查 `if success:` → 当成失败
+- `add_vectors()` 调用未传 `collection_name`, 数据全进默认 `hello_agents_rag_vectors`
+- 参数名是 `metadatas` (复数), 调用时写了 `metadata` (单数)
+**修复**: 删返回值检查; 传 `collection_name=rag_namespace`; `metadata` → `metadatas`
+
+**坑 5: Qdrant Point ID**
+Qdrant 1.18 不接受字符串 ID (如 `lc-1`), 只接受整数或 UUID。
+**修复**: `add_vectors()` 中用 `uuid.uuid5(uuid.NAMESPACE_DNS, str(id_))` 转换。
+
+**坑 6: `del chunks` 顺序**
+`total_cs_chunks += len(chunks)` 放在 `del chunks` 之后 → `UnboundLocalError`。
+**修复**: 先累加, 再 del。
+
+**最终结果**: cs_fundamentals 880 points + leetcode 2913 points, D 盘 393MB。

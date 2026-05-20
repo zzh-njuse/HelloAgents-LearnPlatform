@@ -14,6 +14,7 @@ from hello_agents.tools.registry import ToolRegistry
 
 from academic_companion.config import get_config, AcademicConfig
 from academic_companion.rag_extensions.rag_tool import RAGRetrievalTool
+from academic_companion.memory_extensions.research_notes import ResearchNotes
 
 
 FILTER_SYSTEM_PROMPT = """你是一个学术论文筛选专家。你会收到一批候选论文，请对每篇进行四维评分和筛选。
@@ -50,6 +51,36 @@ FILTER_SYSTEM_PROMPT = """你是一个学术论文筛选专家。你会收到一
 
 {research_summary}
 
+## 结构化输出要求
+在完成筛选后，你必须在回复末尾附加一个 JSON 块，以 `---` 分隔线开头:
+
+```
+---
+```json
+{{
+  "selected": [
+    {{
+      "paper_title": "论文标题",
+      "arxiv_id": "2301.xxx",
+      "reason": "入选理由",
+      "priority": 1
+    }}
+  ],
+  "rejected": [
+    {{
+      "paper_title": "论文标题",
+      "arxiv_id": "2310.xxx",
+      "reason": "淘汰理由"
+    }}
+  ],
+  "selection_criteria": ["引用数>50", "2023年以后"],
+  "notes": "筛选说明"
+}}
+```
+```
+
+selected 最多 5 篇。
+
 当前时间: {current_time}
 """
 
@@ -66,16 +97,18 @@ class FilterAgent(ReActAgent):
         name: str,
         llm: HelloAgentsLLM,
         config: Optional[AcademicConfig] = None,
+        research_notes: Optional[ResearchNotes] = None,
         max_steps: int = 5,
     ):
         self.academic_config = config or get_config()
+        self.research_notes = research_notes or ResearchNotes()
 
         tool_registry = ToolRegistry()
         # 注册 RAG 检索工具 (检查本地知识库)
         tool_registry.register_tool(RAGRetrievalTool())
 
         system_prompt = FILTER_SYSTEM_PROMPT.format(
-            research_summary="",
+            research_summary=self.research_notes.get_summary(),
             current_time=datetime.now().strftime("%Y-%m-%d %H:%M"),
         )
 

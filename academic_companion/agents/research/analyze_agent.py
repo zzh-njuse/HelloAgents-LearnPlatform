@@ -87,6 +87,31 @@ relevance: "high/medium/low"
 
 使用 paper-reading Skill 获取更详细的方法论指导。
 必要时使用 ArxivSearch / SemanticScholar 查找论文全文或引用信息。
+
+## 结构化输出要求
+在完成分析后，你必须在回复末尾附加一个 JSON 块，以 `---` 分隔线开头:
+
+```
+---
+```json
+{{
+  "paper_title": "论文标题",
+  "arxiv_id": "2301.xxx",
+  "analysis": {{
+    "method": "核心方法的简要归纳",
+    "experiments": "实验设置与主要结果",
+    "contributions": "1-3条核心贡献",
+    "limitations": "方法的局限性",
+    "key_insight": "最重要的一个洞察"
+  }},
+  "relevance_rating": 8,
+  "reproducibility": "中",
+  "novelty": "方法创新/综述/应用创新"
+}}
+```
+```
+
+每个 analysis 字段 ≤500 字。
 """
 
 

@@ -309,10 +309,91 @@ Total: 21 passed, 0 failed
 
 ## 后续待办
 
-- [ ] **Qdrant 本地部署**: 中国→AWS us-west 网络不稳定，切换为 Docker 本地 Qdrant
-- [ ] Orchestrator 长链执行稳定性优化（上下文组装 GSSC 集成）
-- [ ] LeetCode 全量 2913 题摄入（Phase 2 遗留）
-- [ ] Phase 2 掌握度评估：从长度占位逻辑改为 LLM 评估
+- [x] **Qdrant 本地部署**: 中国→AWS us-west 网络不稳定，切换为 Docker 本地 Qdrant ✅ — Docker Desktop + D 盘存储, 393MB
+- [x] Orchestrator 长链执行稳定性优化（上下文组装 GSSC 集成）✅ — PipelineContext 结构化组装 + 四子 Agent JSON Schema + 降级保障
+- [x] LeetCode 全量 2913 题摄入（Phase 2 遗留）✅ — 已摄入到本地 Qdrant, 2913 points
+- [x] Phase 2 掌握度评估：从长度占位逻辑改为 LLM 评估 ✅ — CSAssessor + AlgorithmAssessor
 - [ ] Phase 2 多模态/图片支持
 - [ ] WebUI 前端（Phase 4）
 - [ ] A2A 协议替代 TaskTool（加分项）
+- [ ] 本地 spaCy 模型安装 (减少 SemanticMemory WARNING)
+- [ ] Neo4j `learning_memory` 数据库创建
+
+---
+
+## 2026-05-20/21 实现详情
+
+### 1. Qdrant 本地部署
+
+```bash
+docker run -d --name qdrant-local -p 6333:6333 -v D:/qdrant_data:/qdrant/storage qdrant/qdrant:latest
+```
+
+**遇到的坑**:
+
+**Docker 代理**: Desktop 配了代理 `192.168.101.8:7890` (不可达), `docker pull` 失败。
+→ Settings → Resources → Proxies → 关闭 Manual proxy。
+
+**Python httpx 走代理连 localhost 报 503**: 系统环境变量 `HTTP_PROXY` 导致 httpx 把 localhost 请求发到代理。
+curl 不受影响 (不读环境变量代理)。
+**修复**: `qdrant_store.py` 连接 localhost 时自动 `os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1,.local")`;
+`learning_session.py` 启动时同样处理。
+
+**Windows 文件系统警告**: Qdrant 日志 `Unrecognized filesystem` (NTFS 经 Docker Desktop 虚拟化暴露给 Linux)。
+实际不影响使用, 数据完好。
+
+**C 盘空间**: Docker Desktop WSL VM ~4.3GB (不可删), HuggingFace 缓存 ~4GB (可删, 模型已在 ModelScope 缓存),
+ModelScope 缓存 ~1.3GB (不可删)。清理: `rm -rf ~/.cache/huggingface/`。
+
+### 2. 全量数据摄入
+
+**规模**: CS-Base 880 chunks + LeetCode 2913 chunks = 3793 向量 (1024 维)。
+**存储**: D:/qdrant_data, 393MB。
+
+**摄入过程中的 bug** (详见 Phase 2 文档):
+- `_chunk_paragraphs` 死循环 (超大段落 + overlap 重建导致 i 不前进)
+- torch 2.5.1 → 2.12.0 (CVE-2025-32434 安全限制)
+- 僵尸 Python 进程占 20GB → MemoryError
+- `add_vectors` 无返回值 / 未传 collection_name / 参数名不匹配
+- Qdrant Point ID 必须 UUID (不接受字符串)
+- `del chunks` 后引用导致 UnboundLocalError
+
+### 3. Orchestrator 结构化上下文组装
+
+**为什么不用 GSSC**: GSSC 的 Select 阶段 (关键词检索+筛选) 适用于异构信息源。
+研究流水线是线性的 — Orchestrator 掌握全部数据, 不缺"搜索", 缺的是"从散文提取结构化字段"。
+
+**改造方案**:
+
+**四种子 Agent 结构化输出 Schema**:
+
+| Agent | 核心字段 |
+|-------|---------|
+| SearchAgent | `papers: [{title, arxiv_id, authors, year, citations, abstract}]`, `search_queries`, `total_found` |
+| FilterAgent | `selected: [{paper_title, arxiv_id, reason, priority}]`, `rejected`, `selection_criteria` |
+| AnalyzeAgent | `analysis: {method, experiments, contributions, limitations, key_insight}`, `relevance_rating`, `reproducibility` |
+| SynthesizeAgent | `report_markdown`, `comparison_table`, `bibtex`, `key_findings`, `research_gaps` |
+
+**输出方式**: 每个 Agent 的 system prompt 末尾加结构化 JSON 输出要求。
+Orchestrator 用 `_parse_structured_output(raw_text)` 提取 JSON 块 (` ```json ``` 或裸 `{...}`)。
+
+**降级保障**: JSON 解析失败 → `{"raw": raw_text, "parse_failed": True}` → 后续步骤退化为原文截断, **不阻塞流水线**。
+
+**PipelineContext** (新建, ~100 行): 按步骤类型选择性格式化前序结果。
+- `search` 步骤: 仅 Plan
+- `filter` 步骤: Plan + 论文表格 (| # | 标题 | 作者 | 年份 | 引用 |)
+- `analyze` 步骤: Plan + 筛选决策表 + 选中论文详情 (含摘要)
+- `synthesize` 步骤: Plan + 全部前序步骤摘要卡片
+
+**Token 预算**: max_tokens=6000, 超预算时从最旧的论文详情开始裁剪。
+
+**测试结果**: 4 步骤 token 用量 121-345, 远低于 6000 预算。前序结果完整保留, 无 `r[:500]` 硬截断。
+
+**影响文件**:
+- `pipeline_context.py`: **新建** — PipelineContext 组装器
+- `orchestrator.py`: Phase 2 替换 `r[:500]` 截断 → PipelineContext + JSON 解析
+- `search_agent.py`, `filter_agent.py`, `analyze_agent.py`, `synthesize_agent.py`: system prompt 加结构化输出要求
+- `filter_agent.py`: `research_summary=""` → 实际从 ResearchNotes 读取
+
+**附带修复**: `filter_agent.py` 的 `research_summary` 从空字符串改为实际值;
+`orchestrator.py` 工厂函数给 FilterAgent 传 `research_notes`。

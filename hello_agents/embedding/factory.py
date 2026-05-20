@@ -1,12 +1,24 @@
-"""Embedding 工厂函数 — 负责创建和管理全局 embedder 实例"""
+"""Embedding 工厂函数 — 命名注册表，支持不同子系统使用不同模型
 
-from typing import Optional
+用法:
+    # RAG / ingestion → 大模型高精度
+    embedder = get_text_embedder("rag")
+
+    # Memory / 轻量查询 → 小模型低延迟
+    embedder = get_text_embedder("memory")
+
+    # 向后兼容
+    embedder = get_text_embedder()  # → "default"
+"""
+
+import os
+from typing import Dict, Optional
 from .base import EmbeddingModel
 from .local import LocalTransformerEmbedding
 from .tfidf import TFIDFEmbedding
 
-# 全局单例
-_global_embedder: Optional[EmbeddingModel] = None
+# 命名注册表：一个进程可同时持有多个 embedder 实例
+_registry: Dict[str, EmbeddingModel] = {}
 
 
 def create_embedding_model(
@@ -67,28 +79,44 @@ def create_embedding_model_with_fallback(
         )
 
 
-def get_text_embedder() -> EmbeddingModel:
-    """获取全局单例 embedder
+def _resolve_model_name(name: str) -> str:
+    """根据 embedder 名称解析模型名（读环境变量）"""
+    env_map = {
+        "memory": "EMBED_MEMORY_MODEL",
+        "rag": "EMBED_RAG_MODEL",
+    }
+    env_key = env_map.get(name, "EMBED_RAG_MODEL")
+    return os.getenv(env_key, "BAAI/bge-large-zh-v1.5")
 
-    首次调用时自动创建（优先 sentence-transformers，fallback TF-IDF）。
-    后续调用返回已创建的实例。
 
-    Returns:
-        全局 EmbeddingModel 实例
+def get_text_embedder(name: str = "default") -> EmbeddingModel:
+    """获取命名的 embedder 实例（首次调用时创建并缓存）
+
+    不同子系统用不同的 name，各自独立，互不干扰：
+    - "default" / "rag"  → EMBED_RAG_MODEL     (默认 bge-large, 1024维)
+    - "memory"           → EMBED_MEMORY_MODEL   (默认 bge-large, 1024维)
+
+    向后兼容：无参数调用等同 get_text_embedder("default")，走 EMBED_RAG_MODEL。
     """
-    global _global_embedder
-    if _global_embedder is None:
-        _global_embedder = create_embedding_model_with_fallback()
-    return _global_embedder
+    if name not in _registry:
+        model_name = _resolve_model_name(name)
+        _registry[name] = create_embedding_model_with_fallback(model_name=model_name)
+    return _registry[name]
 
 
-def get_dimension(default: int = 384) -> int:
-    """获取当前全局 embedder 的向量维度
+def reset_text_embedder(name: str = "default"):
+    """重置某个命名的 embedder（ingestion 脚本用）"""
+    _registry.pop(name, None)
+
+
+def get_dimension(default: int = 384, name: str = "default") -> int:
+    """获取指定 embedder 的向量维度
 
     Args:
-        default: 全局 embedder 未初始化时的默认维度
+        default: embedder 未初始化时的默认维度
+        name: embedder 名称
     """
     try:
-        return get_text_embedder().dimension
+        return get_text_embedder(name).dimension
     except Exception:
         return default

@@ -274,6 +274,17 @@ def _chunk_paragraphs(paragraphs: List[Dict], chunk_tokens: int, overlap_tokens:
     while i < len(paragraphs):
         p = paragraphs[i]
         p_tokens = _approx_token_len(p["content"]) or 1
+        # 单段落超过 chunk 上限，直接强发，避免 else 分支死循环
+        if p_tokens > chunk_tokens :
+            chunks.append({
+                "content": p["content"],
+                "start": p["start"],
+                "end": p["end"],
+                "heading_path": p.get("heading_path"),
+            })
+            i += 1
+            continue
+        
         if cur_tokens + p_tokens <= chunk_tokens or not cur:
             cur.append(p)
             cur_tokens += p_tokens
@@ -303,6 +314,17 @@ def _chunk_paragraphs(paragraphs: List[Dict], chunk_tokens: int, overlap_tokens:
                 cur = list(reversed(kept))
                 cur_tokens = kept_tokens
             else:
+                cur = []
+                cur_tokens = 0
+            # 若 overlap 重建后同一段落仍无法合并，强制发射 cur 防止死循环
+            if cur and cur_tokens + p_tokens > chunk_tokens:
+                oc = "\n\n".join(x["content"] for x in cur)
+                chunks.append({
+                    "content": oc,
+                    "start": cur[0]["start"],
+                    "end": cur[-1]["end"],
+                    "heading_path": next((x.get("heading_path") for x in reversed(cur) if x.get("heading_path")), None),
+                })
                 cur = []
                 cur_tokens = 0
     if cur:
@@ -621,12 +643,8 @@ def index_chunks(
         ids.append(ch["id"])
     
     print(f"[RAG] Qdrant upsert start: n={len(vecs)}")
-    success = store.add_vectors(vectors=vecs, metadata=metas, ids=ids)
-    if success:
-        print(f"[RAG] Qdrant upsert done: {len(vecs)} vectors indexed")
-    else:
-        print(f"[RAG] Qdrant upsert failed")
-        raise RuntimeError("Failed to index vectors to Qdrant")
+    store.add_vectors(vectors=vecs, metadatas=metas, ids=ids, collection_name=rag_namespace)
+    print(f"[RAG] Qdrant upsert done: {len(vecs)} vectors indexed to '{rag_namespace}'")
 
 
 def embed_query(query: str) -> List[float]:

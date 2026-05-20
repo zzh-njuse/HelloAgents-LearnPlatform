@@ -35,7 +35,8 @@ class RAGRetrievalTool(Tool):
 参数:
 - query: 搜索查询（必需）
 - top_k: 返回结果数（1-20，默认 5）
-- topic: 限定知识领域（可选: os/network/database/algorithm/leetcode）""",
+- topic: 限定知识领域（可选: os/network/database/algorithm/leetcode）
+- source_dir: 限定文件目录（如 mysql/index），用于章节范围检索""",
             expandable=False,
         )
 
@@ -61,6 +62,13 @@ class RAGRetrievalTool(Tool):
                 required=False,
                 default="",
             ),
+            ToolParameter(
+                name="source_dir",
+                type="string",
+                description="限定文件目录路径（如 mysql/index），留空则不限制",
+                required=False,
+                default="",
+            ),
         ]
 
     def _build_search_query(self, query: str, topic: str = "") -> str:
@@ -80,6 +88,7 @@ class RAGRetrievalTool(Tool):
         query = parameters.get("query", "")
         topic = parameters.get("topic", "")
         top_k = min(max(int(parameters.get("top_k", 5)), 1), 20)
+        source_dir = parameters.get("source_dir", "")
 
         if not query.strip():
             return ToolResponse.error(
@@ -101,6 +110,15 @@ class RAGRetrievalTool(Tool):
             embedder = get_text_embedder()
             query_vector = embedder.embed([search_query])[0]
 
+            # Qdrant payload filter（按章节 source_dir 过滤）
+            sc_filter = None
+            if source_dir:
+                sc_filter = {
+                    "must": [
+                        {"key": "source_path", "match": {"text": source_dir}}
+                    ]
+                }
+
             all_results = []
 
             # 搜索 CS 知识库
@@ -109,6 +127,7 @@ class RAGRetrievalTool(Tool):
                 top_k=top_k,
                 score_threshold=config.rag.score_threshold,
                 collection_name=config.rag.collection_cs,
+                filter_conditions=sc_filter,
             )
             all_results.extend(cs_results)
 
@@ -118,6 +137,7 @@ class RAGRetrievalTool(Tool):
                 top_k=max(3, top_k // 2),
                 score_threshold=config.rag.score_threshold,
                 collection_name=config.rag.collection_leetcode,
+                filter_conditions=sc_filter,
             )
             all_results.extend(lc_results)
 

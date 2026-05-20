@@ -54,6 +54,9 @@ class QdrantConnectionManager:
                     "Qdrant client requires 'qdrant-client'. "
                     "Install it with: pip install qdrant-client"
                 )
+            # 防止系统代理干扰本地 Qdrant 连接
+            if self._url and "localhost" in self._url:
+                os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1,.local")
             kwargs = {"url": self._url, "timeout": int(os.environ.get("QDRANT_TIMEOUT", "30"))}
             if self._api_key:
                 kwargs["api_key"] = self._api_key
@@ -174,14 +177,21 @@ class QdrantVectorStore:
             )
 
         from qdrant_client.models import PointStruct
+        import uuid
 
         # 自动推断维度
         dimension = len(vectors[0]) if vectors else 0
         self.ensure_collection(collection_name, dimension)
 
+        # 把字符串 ID 转为 UUID（Qdrant 不接受任意字符串）
+        uuid_ids = [
+            str(uuid.uuid5(uuid.NAMESPACE_DNS, str(id_)))
+            for id_ in ids
+        ]
+
         points = [
-            PointStruct(id=id_, vector=vec, payload=meta)
-            for id_, vec, meta in zip(ids, vectors, metadatas)
+            PointStruct(id=uid, vector=vec, payload=meta)
+            for uid, vec, meta in zip(uuid_ids, vectors, metadatas)
         ]
 
         # 分批写入（每批最多 1000 条）

@@ -7,6 +7,7 @@ Execute: 用自己的 TaskTool 将每步委派给子 Agent，不再用框架 Exe
   Plan → Step 1: Task("search") → Step 2: Task("filter") → Step 3: Task("analyze") → Step 4: Task("synthesize")
 """
 
+import json
 import os
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -38,6 +39,7 @@ RESEARCH_FULL = CustomFilter(
 
 from academic_companion.config import get_config, AcademicConfig
 from academic_companion.memory_extensions.research_notes import ResearchNotes
+from .pipeline_context import PipelineContext
 
 
 ORCHESTRATOR_SYSTEM_PROMPT = """你是一个学术研究协调员。收到研究主题后，请生成一份研究计划。
@@ -81,6 +83,7 @@ def _research_agent_factory(
         from academic_companion.agents.research.filter_agent import FilterAgent
         return FilterAgent(
             name=sub_name, llm=llm, config=academic_config,
+            research_notes=research_notes,
             max_steps=academic_config.research.subagent_max_steps,
         )
     elif agent_type == "analyze":
@@ -176,6 +179,7 @@ class ResearchOrchestrator(PlanSolveAgent):
         )
         tool_registry.register_tool(task_tool)
         self._task_tool = task_tool
+        self.pipe_ctx = PipelineContext(max_tokens=6000)
 
         system_prompt = ORCHESTRATOR_SYSTEM_PROMPT.format(
             research_summary=self.research_notes.get_summary(),
@@ -205,7 +209,9 @@ class ResearchOrchestrator(PlanSolveAgent):
             return "无法生成研究计划，任务终止。"
 
         # Phase 2: Execute — 每步用 TaskTool 委派子 Agent
-        step_results = []
+        # structured_results: {step_name: parsed_dict}
+        structured_results: Dict[str, dict] = {}
+        step_summaries: list = []  # 用于 Phase 3 展示
 
         for i, step in enumerate(plan, 1):
             print(f"\n--- Step {i}/{len(plan)}: {step[:60]}... ---")
@@ -213,19 +219,19 @@ class ResearchOrchestrator(PlanSolveAgent):
             agent_type = _step_to_agent_type(step)
             tool_filter = RESEARCH_FULL if agent_type == "synthesize" else RESEARCH_READONLY
 
-            # 构建任务：带上前几步的结果作为上下文
-            task = step
-            if step_results:
-                prev = "\n".join(
-                    f"[Step {j}] {r[:500]}"
-                    for j, r in enumerate(step_results, 1)
-                )
-                task = f"已有上下文:\n{prev}\n\n当前任务: {step}"
+            # 用 PipelineContext 组装结构化上下文（替代旧版 [:500] 截断）
+            context = self.pipe_ctx.build(
+                step_index=i - 1,
+                step_type=agent_type,
+                plan=plan,
+                structured_results=structured_results,
+            )
+            task = f"{context}\n\n---\n当前任务: {step}"
 
             try:
                 sub = self._agent_factory(agent_type)
                 if sub is None:
-                    step_results.append(f"[{agent_type}] 无法创建子 Agent")
+                    step_summaries.append(f"[{agent_type}] 无法创建子 Agent")
                     continue
 
                 result = sub.run_as_subagent(
@@ -234,20 +240,52 @@ class ResearchOrchestrator(PlanSolveAgent):
                     return_summary=True,
                     max_steps_override=self.academic_config.research.subagent_max_steps,
                 )
-                summary = result.get("summary", str(result))
-                step_results.append(summary)
-                print(f"  -> {agent_type} 完成 ({result.get('metadata', {}).get('steps', '?')} steps)")
+                raw_output = result.get("summary", str(result))
+
+                # 提取结构化 JSON
+                parsed = self._parse_structured_output(raw_output, agent_type)
+                structured_results[agent_type] = parsed
+                step_summaries.append(raw_output)
+
+                if parsed.get("parse_failed"):
+                    print(f"  -> {agent_type} 完成 (JSON 解析失败，降级为原始文本)")
+                else:
+                    print(f"  -> {agent_type} 完成 (结构化输出 OK)")
 
             except Exception as e:
-                step_results.append(f"[{agent_type}] 执行失败: {str(e)}")
+                err_msg = f"[{agent_type}] 执行失败: {str(e)}"
+                step_summaries.append(err_msg)
+                structured_results[agent_type] = {"raw": err_msg, "parse_failed": True}
                 print(f"  -> 失败: {e}")
 
         # Phase 3: 汇总
         final = "\n\n".join(
             f"## Step {j+1} ({_step_to_agent_type(plan[j])})\n{r}"
-            for j, r in enumerate(step_results)
+            for j, r in enumerate(step_summaries)
         )
         return final
+
+    def _parse_structured_output(self, raw_text: str, agent_type: str) -> dict:
+        """从 Agent 回复中提取结构化 JSON 块
+
+        降级策略: JSON 解析失败 → {"raw": raw_text, "parse_failed": True}
+        """
+        import re
+        # 找最后一个 ```json ... ``` 块
+        json_blocks = list(re.finditer(r'```json\s*\n(.*?)```', raw_text, re.DOTALL))
+        if json_blocks:
+            try:
+                return json.loads(json_blocks[-1].group(1))
+            except json.JSONDecodeError:
+                pass
+        # 尝试找裸 JSON 块 (以 { 开头 } 结尾)
+        try:
+            start = raw_text.rindex('{')
+            end = raw_text.rindex('}') + 1
+            return json.loads(raw_text[start:end])
+        except (ValueError, json.JSONDecodeError):
+            pass
+        return {"raw": raw_text, "parse_failed": True}
 
     async def arun(self, input_text: str, **kwargs) -> str:
         result = await super().arun(input_text, **kwargs)

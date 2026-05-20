@@ -41,6 +41,33 @@ SEARCH_SYSTEM_PROMPT = """你是一个学术论文搜索专家。你的任务是
 
 {research_summary}
 
+## 结构化输出要求
+在完成搜索和整理后，你必须在回复末尾附加一个 JSON 块，以 `---` 分隔线开头:
+
+```
+---
+```json
+{{
+  "papers": [
+    {{
+      "arxiv_id": "2301.12345",
+      "title": "论文标题",
+      "authors": "第一作者 et al.",
+      "year": 2023,
+      "citations": 120,
+      "abstract": "摘要全文...",
+      "url": "https://arxiv.org/abs/2301.12345"
+    }}
+  ],
+  "search_queries": ["使用的关键词"],
+  "total_found": 15,
+  "search_strategy": "搜索策略简述"
+}}
+```
+```
+
+最多列出 10 篇论文。JSON 块之前的内容是对用户的自然语言回复。
+
 当前时间: {current_time}
 """
 

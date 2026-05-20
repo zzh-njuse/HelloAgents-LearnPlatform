@@ -362,7 +362,7 @@ class ResearchNotes:
             from academic_companion.config import get_config
 
             config = get_config()
-            embedder = get_text_embedder()
+            embedder = get_text_embedder("memory")
             store = QdrantVectorStore()
 
             text = entry.to_text()
