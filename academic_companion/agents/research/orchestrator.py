@@ -16,6 +16,7 @@ from hello_agents.agents.plan_solve_agent import PlanSolveAgent
 from hello_agents.core.llm import HelloAgentsLLM
 from hello_agents.core.config import Config
 from hello_agents.core.agent import Agent
+from hello_agents.core.streaming import StreamEvent, StreamEventType
 from hello_agents.tools.registry import ToolRegistry
 from hello_agents.tools.builtin.task_tool import TaskTool
 from hello_agents.tools.tool_filter import CustomFilter
@@ -237,10 +238,10 @@ class ResearchOrchestrator(PlanSolveAgent):
                 result = sub.run_as_subagent(
                     task=task,
                     tool_filter=tool_filter,
-                    return_summary=True,
+                    return_summary=False,
                     max_steps_override=self.academic_config.research.subagent_max_steps,
                 )
-                raw_output = result.get("summary", str(result))
+                raw_output = result.get("result", str(result))
 
                 # 提取结构化 JSON
                 parsed = self._parse_structured_output(raw_output, agent_type)
@@ -286,6 +287,110 @@ class ResearchOrchestrator(PlanSolveAgent):
         except (ValueError, json.JSONDecodeError):
             pass
         return {"raw": raw_text, "parse_failed": True}
+
+    def run_streaming(self, input_text: str):
+        """流式执行研究 pipeline，逐步产出 StreamEvent
+
+        供 FastAPI SSE 端点调用。每个步骤前后发射事件。
+        """
+        yield StreamEvent.create(
+            StreamEventType.AGENT_START, self.name,
+            input_text=input_text,
+        )
+
+        # Phase 1: Plan
+        yield StreamEvent.create(
+            StreamEventType.THINKING, self.name,
+            content=f"正在规划研究路径：{input_text[:80]}...",
+        )
+
+        plan = self.planner.plan(input_text)
+        if not plan:
+            yield StreamEvent.create(
+                StreamEventType.ERROR, self.name,
+                error="无法生成研究计划",
+            )
+            yield StreamEvent.create(
+                StreamEventType.AGENT_FINISH, self.name,
+                result="任务终止：无法生成研究计划。",
+            )
+            return
+
+        yield StreamEvent.create(
+            StreamEventType.THINKING, self.name,
+            content=f"研究计划共 {len(plan)} 步：{' → '.join(_step_to_agent_type(s) for s in plan)}",
+        )
+
+        # Phase 2: Execute pipeline
+        structured_results: dict = {}
+        step_summaries: list = []
+
+        for i, step in enumerate(plan, 1):
+            agent_type = _step_to_agent_type(step)
+            tool_filter = RESEARCH_FULL if agent_type == "synthesize" else RESEARCH_READONLY
+
+            yield StreamEvent.create(
+                StreamEventType.STEP_START, self.name,
+                step=i, step_type=agent_type, description=step,
+            )
+
+            context = self.pipe_ctx.build(
+                step_index=i - 1,
+                step_type=agent_type,
+                plan=plan,
+                structured_results=structured_results,
+            )
+            task = f"{context}\n\n---\n当前任务: {step}"
+
+            try:
+                sub = self._agent_factory(agent_type)
+                if sub is None:
+                    step_summaries.append(f"[{agent_type}] 无法创建子 Agent")
+                    yield StreamEvent.create(
+                        StreamEventType.STEP_FINISH, self.name,
+                        step=i, step_type=agent_type, status="failed",
+                        error="无法创建子 Agent",
+                    )
+                    continue
+
+                result = sub.run_as_subagent(
+                    task=task,
+                    tool_filter=tool_filter,
+                    return_summary=False,
+                    max_steps_override=self.academic_config.research.subagent_max_steps,
+                )
+                raw_output = result.get("result", str(result))
+                parsed = self._parse_structured_output(raw_output, agent_type)
+                structured_results[agent_type] = parsed
+                step_summaries.append(raw_output)
+
+                yield StreamEvent.create(
+                    StreamEventType.STEP_FINISH, self.name,
+                    step=i, step_type=agent_type, status="completed",
+                    json_ok=not parsed.get("parse_failed", False),
+                    summary=raw_output[:500],
+                )
+
+            except Exception as e:
+                err_msg = f"[{agent_type}] 执行失败: {str(e)}"
+                step_summaries.append(err_msg)
+                structured_results[agent_type] = {"raw": err_msg, "parse_failed": True}
+                yield StreamEvent.create(
+                    StreamEventType.STEP_FINISH, self.name,
+                    step=i, step_type=agent_type, status="failed",
+                    error=str(e),
+                )
+
+        # Phase 3: Final result
+        final = "\n\n".join(
+            f"## Step {j+1} ({_step_to_agent_type(plan[j])})\n{r}"
+            for j, r in enumerate(step_summaries)
+        )
+
+        yield StreamEvent.create(
+            StreamEventType.AGENT_FINISH, self.name,
+            result=final, steps=len(plan),
+        )
 
     async def arun(self, input_text: str, **kwargs) -> str:
         result = await super().arun(input_text, **kwargs)

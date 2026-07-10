@@ -165,3 +165,10 @@ cython_debug/
 # 运行时生成数据（traces, sessions, todos）
 /memory/
 /memory_data/
+
+# Local audit, editor, and scratch artifacts
+/.backups/
+/.claude/
+/_check_qdrant.py
+/_test_agent.py
+/research_report.md

@@ -69,7 +69,7 @@ class ResearchModeConfig:
     """研究模式 Agent 配置"""
     temperature: float = 0.3
     max_steps: int = 10
-    subagent_max_steps: int = 6
+    subagent_max_steps: int = 10
 
 
 @dataclass
