@@ -1,62 +1,62 @@
-# 0R-A Dependency And Verification Baseline
+# 0R-A：依赖与验证基线
 
-Status: complete
-Date: 2026-07-10
-Baseline commit: `4b81f92461ff05c3d78f4bc6cf54cd07a01ba753`
+状态：完成
+日期：2026-07-10
+基线提交：`4b81f92461ff05c3d78f4bc6cf54cd07a01ba753`
 
-## Purpose
+## 目的
 
-This record establishes the reproducible starting point before creating the product application. It describes three execution lanes rather than treating them as one installable application.
+本记录在创建产品应用前固化可复现的起点。它将现有代码划分为三个独立运行通道，而不把它们误认为同一个可安装应用。
 
-| Lane | Current authority | Result | 0R conclusion |
+| 通道 | 当前权威来源 | 结果 | 0R 结论 |
 |---|---|---|---|
-| `hello_agents/` framework | root `pyproject.toml`, `requirements.txt`, `uv.lock` | Core dependencies resolve with `uv --frozen`; root test tools are not declared | Preserve as reusable framework lane |
-| `academic_companion/` prototype API | source imports only | FastAPI, Uvicorn, Qdrant client lack an independent manifest | Reference prototype, not runnable product entry |
-| `academic_companion/webui/` prototype Web | `package.json`, `package-lock.json` | lint and production build pass | UI/streaming-contract reference, not Stage 1 Web |
+| `hello_agents/` framework | 根目录 `pyproject.toml`、`requirements.txt`、`uv.lock` | 核心依赖可由 `uv --frozen` 解析；根测试工具未声明 | 保持为可复用 framework 通道 |
+| `academic_companion/` 原型 API | 仅源码 import | 使用了 FastAPI、Uvicorn、Qdrant client，但没有独立依赖清单 | 作为参考原型，不作为可运行的产品入口 |
+| `academic_companion/webui/` 原型 Web | `package.json`、`package-lock.json` | lint 和生产构建通过 | 作为 UI/SSE 合约参考，不作为 Stage 1 Web |
 
-## Environment Observed
+## 观察到的环境
 
-- Windows host; default `python` is Anaconda Python 3.13.5.
-- `uv` created an ignored local `.venv` with CPython 3.12.13 for the frozen framework lane.
-- Node.js is 24.14.0 and npm is 11.9.0.
-- Docker was not needed for this audit; Compose acceptance belongs to Stage 1.
+- Windows 主机；默认 `python` 为 Anaconda Python 3.13.5。
+- `uv` 为冻结的 framework 通道创建了被忽略的本地 `.venv`，解释器为 CPython 3.12.13。
+- Node.js 为 24.14.0，npm 为 11.9.0。
+- 本次审计无需 Docker；Compose 验收属于 Stage 1。
 
-The default Anaconda environment lacks declared `tiktoken`, so root test collection cannot start there. It is not an acceptance environment for this repository.
+默认 Anaconda 环境缺少已声明的 `tiktoken`，因此根测试无法完成收集。它不是本仓库的验收环境。
 
-## Commands And Results
+## 命令与结果
 
-| Command | Result | Notes |
+| 命令 | 结果 | 说明 |
 |---|---|---|
-| `python -m pip check` | pass | No broken packages in the unrelated default environment |
-| `python -m pytest -q` | blocked at collection | `ModuleNotFoundError: tiktoken` |
-| `uv run --locked python -m pytest -q` | blocked before execution | `uv.lock` is stale relative to `pyproject.toml` |
-| `uv run --frozen python -m pytest --collect-only -q` with temporary `pytest` and `pytest-asyncio` | pass | 231 tests collected on CPython 3.12.13 |
-| focused offline framework suite | pass | 155 passed, 4 skipped in 3.81 seconds |
-| `npm.cmd run lint` in `academic_companion/webui` | pass | Existing prototype lint baseline |
-| `npm.cmd run build` in `academic_companion/webui` | pass with warning | Largest JS chunk is 620.56 kB, above Vite's 500 kB warning threshold |
+| `python -m pip check` | 通过 | 默认环境中没有破损的包关系，但该环境与项目无关 |
+| `python -m pytest -q` | 在收集阶段阻塞 | `ModuleNotFoundError: tiktoken` |
+| `uv run --locked python -m pytest -q` | 执行前阻塞 | `uv.lock` 相对 `pyproject.toml` 已漂移 |
+| 带临时 `pytest`、`pytest-asyncio` 的 `uv run --frozen python -m pytest --collect-only -q` | 通过 | CPython 3.12.13 共收集 231 个测试 |
+| 聚焦的离线 framework 测试集 | 通过 | 3.81 秒内 `155 passed, 4 skipped` |
+| 在 `academic_companion/webui` 执行 `npm.cmd run lint` | 通过 | 既有 Web 原型 lint 基线 |
+| 在 `academic_companion/webui` 执行 `npm.cmd run build` | 通过，有警告 | 最大 JS chunk 为 620.56 kB，超过 Vite 500 kB 警告阈值 |
 
-The focused suite used `uv run --frozen --with pytest --with pytest-asyncio` over lifecycle, circuit-breaker, custom-tool, file-tool, LLM-function-calling, observability, research-note, session-persistence, skills, subagent, todo, tool-filter, and tool-response tests.
+聚焦测试集使用 `uv run --frozen --with pytest --with pytest-asyncio`，覆盖 lifecycle、circuit-breaker、custom-tool、file-tool、LLM function-calling、observability、research-note、session-persistence、skills、subagent、todo、tool-filter 与 tool-response 测试。
 
-Skipped cases require a real LLM configuration. `tests/test_all_agents.py`, real-provider cases, and optional MCP/external-tool cases are not a deterministic local acceptance suite; they remain distinct from product Stage 1 acceptance.
+被跳过的用例需要真实 LLM 配置。`tests/test_all_agents.py`、真实 provider 用例和可选 MCP/外部工具用例不属于可确定复现的本地验收集，必须与产品 Stage 1 验收分开记录。
 
-## Dependency Findings
+## 依赖发现
 
-1. Root package dependencies include `tiktoken`, but the default host Python does not provide it. `uv --frozen` resolves the declared framework runtime.
-2. Root test dependencies are implicit. `pytest` and `pytest-asyncio` are needed by the suite but are neither a project dependency group nor locked.
-3. The lock is not synchronized with root project metadata. `--frozen` can use the existing lock, while `--locked` correctly refuses it.
-4. Qdrant support is lazy-imported in `hello_agents/storage/qdrant_store.py`; FastMCP is likewise optional. Neither belongs in the framework mandatory set merely because the prototype can use it.
-5. The prototype API imports `fastapi`, `uvicorn`, and `qdrant_client`, but no application-scoped dependency manifest declares them. This prevents a reliable API startup command today.
-6. The prototype Web owns a valid npm lockfile, but its built output indicates a future bundle-splitting review, not a Stage 0R blocker.
+1. 根包声明了 `tiktoken`，但默认主机 Python 未安装它；`uv --frozen` 可以解析声明的 framework runtime。
+2. 根测试依赖是隐式的。测试集需要 `pytest` 和 `pytest-asyncio`，但二者既不在项目 dependency group 中，也不在锁文件中。
+3. 锁文件未与根项目元数据同步。`--frozen` 可使用已有锁，`--locked` 正确地拒绝执行。
+4. `hello_agents/storage/qdrant_store.py` 对 Qdrant 为延迟 import；FastMCP 同样为可选能力。不能只因原型可能使用它们，就把它们加入 framework 强制依赖。
+5. 原型 API import 了 `fastapi`、`uvicorn` 和 `qdrant_client`，但没有应用级依赖清单声明它们，当前不存在可靠的 API 启动命令。
+6. 原型 Web 有有效 npm lockfile，但构建输出提示未来需评估 bundle 拆分；这不是 Stage 0R 阻塞项。
 
-## Baseline Decisions
+## 基线决策
 
-- Do not rewrite the root lockfile during reconstruction. A dependency-only change must first decide whether framework test tooling belongs in a dev dependency group and regenerate the lock in a dedicated reviewable change.
-- Do not add prototype API packages to the framework package. Stage 1 owns an independent `apps/api/requirements.txt`, as recorded in its draft ADR.
-- Use `uv run --frozen --with pytest --with pytest-asyncio` for the temporary framework verification lane until the dependency decision is implemented.
-- Treat the focused suite as the current deterministic framework gate; run real-provider and external-tool tests only with explicit runtime configuration and separately recorded results.
+- 重建阶段不改写根锁文件。必须先决定 framework 测试工具是否属于 dev dependency group，再在独立、可评审的变更中重建锁文件。
+- 不把原型 API 包加入 framework 包。Stage 1 通过独立的 `apps/api/requirements.txt` 管理应用依赖，相关决定见其 ADR 草案。
+- 在依赖策略实施前，使用 `uv run --frozen --with pytest --with pytest-asyncio` 作为临时 framework 验证通道。
+- 将聚焦测试集作为当前确定性的 framework gate；真实 provider 与外部工具测试仅在显式 runtime 配置下运行，并单独记录结果。
 
-## Exit Criteria Met
+## 已满足的退出条件
 
-- Current framework, prototype API, and prototype Web install boundaries are identified.
-- A reproducible framework collection command and offline passing subset are recorded.
-- Prototype API undeclared runtime dependencies are known before any product application is created.
+- 已识别 framework、原型 API 与原型 Web 的安装边界。
+- 已记录可复现的 framework 收集命令和离线通过的测试子集。
+- 已在创建产品应用前确认原型 API 的未声明 runtime 依赖。

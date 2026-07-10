@@ -17,7 +17,7 @@ Stage 0R 不迁移误仓库业务代码，也不开始 Stage 1 平台实现。
 - 现状评估与重新计划：`CURRENT_STATE_AND_REPLAN.md`
 - 0R-A 依赖与验证基线：`DEPENDENCY_AND_VERIFICATION_BASELINE.md`
 - 0R-B 原型合约盘点：`PROTOTYPE_CONTRACT_INVENTORY.md`
-- Stage 1 Spec/ADR/采用矩阵：`../01-platform-stage-1-self-host-shell/README.md`
+- Stage 1 规格说明/ADR/采用矩阵：`../01-platform-stage-1-self-host-shell/README.md`
 - Review 记录模板：`reviews/README.md`
 - 产品蓝图：`../LEARNING_AGENT_BLUEPRINT.md`
 - 开发路线：`../SELF_HOST_DEVELOPMENT_ROADMAP.md`

@@ -1,69 +1,69 @@
-# Spec 001: Self-Host Platform Shell
+# Spec 001：Self-Host 平台壳
 
-Status: draft; implementation requires explicit confirmation
-Date: 2026-07-10
+状态：草案；实现前需要明确确认
+日期：2026-07-10
 
-## Goal
+## 目标
 
-Create a self-hostable product application around the existing framework and academic assets. The initial screen is an operational workspace workbench, not a dual-mode chat application.
+围绕现有 framework 与 academic 资产建立可 self-host 的产品应用。首屏是 operational workspace workbench，而不是双模式 chat 应用。
 
-## Product Boundary
+## 产品边界
 
-`hello_agents/` is reusable framework code, `academic_companion/` is reusable academic/domain material and prototype reference, and `apps/api` plus `apps/web` are product code.
+`hello_agents/` 为可复用 framework；`academic_companion/` 为可复用 academic/domain 资产与原型参考；`apps/api` 与 `apps/web` 为产品代码。
 
-Product business state belongs in Postgres. Qdrant is rebuildable derived indexing infrastructure. Redis is non-authoritative coordination infrastructure. Neither prototype in-memory sessions nor bundled data trees become a product source of truth.
+产品业务状态属于 Postgres；Qdrant 是可重建的派生索引基础设施；Redis 是非权威的协调基础设施。原型内存 session 和内置数据目录均不得成为产品事实来源。
 
-## In Scope
+## 范围内
 
-- `apps/api` FastAPI application with independent dependencies and tests.
-- `apps/web` React/Vite/TypeScript application with independent npm lockfile.
-- Docker Compose services: Postgres, Qdrant, Redis, API, and Web.
-- Postgres migration and minimal `workspaces` table.
-- Workspace list, create, and get API.
-- Product liveness, readiness, and non-sensitive system-info endpoints.
-- A read-only academic capability/catalog adapter that proves the product can depend on `academic_companion` without moving product code into it or calling an LLM.
-- Web workbench showing readiness, workspace list, workspace creation, and an honest empty state for later material work.
-- Request ID and structured, non-sensitive server logging.
-- Stage-specific verification commands, review record, and self-host runbook.
+- 带独立依赖与测试的 `apps/api` FastAPI 应用。
+- 带独立 npm lockfile 的 `apps/web` React/Vite/TypeScript 应用。
+- Postgres、Qdrant、Redis、API、Web 五项 Docker Compose 服务。
+- Postgres migration 与最小 `workspaces` 表。
+- workspace 的 list、create 与 get API。
+- 产品存活检查、readiness 与非敏感 system-info 接口。
+- 只读 academic capability/catalog adapter：证明产品能依赖 `academic_companion`，但不把产品代码移入其中，也不调用 LLM。
+- 展示 readiness、workspace 列表、workspace 创建和诚实空状态的 Web workbench，为后续资料能力预留位置。
+- request ID，以及结构化、非敏感的服务端日志。
+- Stage 专属验证命令、review 记录与 self-host runbook。
 
-## Out Of Scope
+## 范围外
 
-- Authentication, multi-user permissions, deletion semantics, and OAuth.
-- Uploads, parsing, OCR, batch import, jobs, chunks, embeddings, or Qdrant writes. Those belong to Platform Stage 2 slices.
-- Agent chat, SSE product endpoints, course reader, knowledge graph, exercises, spaced repetition, and run/cost analytics.
-- Neo4j, a worker service, HTTPS/reverse proxy, and cloud deployment.
-- A data model specialized for existing interview-note or LeetCode assets.
+- 认证、多用户权限、删除语义和 OAuth。
+- 上传、解析、OCR、批量导入、job、chunk、embedding 或 Qdrant 写入；这些属于 Platform Stage 2 的切片。
+- Agent chat、SSE 产品接口、course reader、知识图谱、练习、间隔重复及 run/cost analytics。
+- Neo4j、worker 服务、HTTPS/reverse proxy 和云部署。
+- 针对现有八股或 LeetCode 资产的专用数据模型。
 
-## Repository Layout
+## 仓库布局
 
-The implementation adds `apps/api/learn_platform_api`, `apps/api/alembic`, `apps/api/tests`, `apps/api/requirements.txt`, `apps/api/Dockerfile`, `apps/web`, root `docker-compose.yml`, and ignored runtime `storage/`. The package name deliberately differs from the mistaken repository so this repository establishes its own product identity.
+实现将新增 `apps/api/learn_platform_api`、`apps/api/alembic`、`apps/api/tests`、`apps/api/requirements.txt`、`apps/api/Dockerfile`、`apps/web`、根目录 `docker-compose.yml` 和被忽略的运行时 `storage/`。包名刻意区别于误仓库，使正确仓库建立自己的产品身份。
 
-## API Contract
+## API 合约
 
-| Method | Path | Required behavior |
+| 方法 | 路径 | 必需行为 |
 |---|---|---|
-| `GET` | `/health` | Process-only liveness; does not probe dependencies |
-| `GET` | `/ready` | Reports Postgres, Qdrant, Redis, and storage-root checks as `ready` or `degraded`; no credentials or service URLs |
-| `GET` | `/api/v1/system/info` | Non-sensitive product name, environment, and storage configured flag |
-| `GET` | `/api/v1/workspaces` | Paginated workspace list, newest first |
-| `POST` | `/api/v1/workspaces` | Create a workspace and collision-safe slug |
-| `GET` | `/api/v1/workspaces/{workspace_id}` | Return one workspace or 404 |
-| `GET` | `/api/v1/capabilities` | Read-only framework/academic capability categories; no LLM invocation |
+| `GET` | `/health` | 仅进程级存活检查；不探测依赖 |
+| `GET` | `/ready` | 报告 Postgres、Qdrant、Redis 和 storage root 为 `ready` 或 `degraded`；不得返回凭据或服务 URL |
+| `GET` | `/api/v1/system/info` | 返回非敏感产品名、环境和 storage 已配置标识 |
+| `GET` | `/api/v1/workspaces` | 分页列出 workspace，最新优先 |
+| `POST` | `/api/v1/workspaces` | 创建 workspace，并保证 slug 碰撞安全 |
+| `GET` | `/api/v1/workspaces/{workspace_id}` | 返回单个 workspace 或 404 |
+| `GET` | `/api/v1/capabilities` | 只读 framework/academic 能力类别；不得调用 LLM |
 
-`workspaces` contains `id`, `name`, unique `slug`, nullable `description`, `created_at`, and `updated_at`. Workspace deletion is intentionally absent.
+`workspaces` 含 `id`、`name`、唯一 `slug`、可空 `description`、`created_at` 和 `updated_at`。本 Stage 故意不提供 workspace 删除。
 
-## Web Contract
+## Web 合约
 
-The first viewport must show a usable workbench: workspace navigation and selection; system readiness without backend addresses; workspace creation with client validation and server errors; and a current-workspace empty state that reserves later material capability without representing it as implemented.
+首屏必须是可用 workbench：workspace 导航与选中态；不暴露后端地址的系统 readiness；具有客户端校验与服务端错误展示的 workspace 创建；以及为后续资料能力留位、但不虚假宣称已实现的当前 workspace 空状态。
 
-Stage 1 does not route the Web through prototype `/api/chat` endpoints and does not surface a chat composer as the product center.
+Stage 1 不通过原型 `/api/chat` 接口连接 Web，也不将 chat composer 置于产品中心。
 
-## Delivery And Verification
+## 交付与验证
 
-The implementation will be accepted only when API tests, Web lint/build, `docker compose config`, and `docker compose up --build` are recorded as applicable. The final runbook must state prerequisites, environment variables, migration command, local operator URLs, and shutdown/data-volume behavior. Substantive code changes require the repository review workflow in `AGENTS.md`; OCR results or a consciously declined review must be recorded in this stage's `reviews/` directory.
+实现验收必须按适用情况记录 API 测试、Web lint/build、`docker compose config` 及 `docker compose up --build`。最终 runbook 必须说明前置条件、环境变量、migration 命令、本地操作者 URL、关闭方式和 data volume 行为。实质性代码变更须执行 `AGENTS.md` 中的 review 工作流；OCR 结果或有意识地不执行 review 的决定必须记录在本 Stage 的 `reviews/` 目录。
 
-## Acceptance Notes
+## 验收说明
 
-- The product API owns the versioned contract. Prototype route compatibility is not promised because the prototype has not been released as a product API.
-- Compose validation must use clean configuration and named service volumes.
-- Live stack acceptance must confirm Web load, Postgres-persisted workspace creation, and `/ready` distinction between healthy and degraded dependencies.
+- 产品 API 自己拥有版本化合约。原型 route 从未作为产品 API 发布，因此不承诺兼容。
+- Compose 验证必须使用干净配置与 named service volume。
+- 实际运行栈验收必须确认 Web 可加载、workspace 创建经 Postgres 持久化，且 `/ready` 能区分健康与降级依赖。

@@ -1,35 +1,35 @@
-# Stage 1 Reference Adoption Matrix
+# Stage 1：参考实现采用矩阵
 
-Status: complete for planning; no reference code is migrated by this document.
+状态：规划完成；本文档不迁移任何参考代码。
 
-The source reference is the mistaken repository's Legacy Phase 1 skeleton. Each outcome is deliberately limited to avoid importing its baseline mistakes.
+参考来源为误仓库的 Legacy Phase 1 skeleton。每项处置都被刻意限制，避免把其基线问题带入正确仓库。
 
-| Reference asset | Decision | Stage 1 treatment | Reason |
+| 参考资产 | 决策 | Stage 1 处理方式 | 原因 |
 |---|---|---|---|
-| `apps/api` directory separation | adopt | recreate under `apps/api/learn_platform_api` | Preserves framework/product boundary while giving this repository its own name |
-| FastAPI app factory and router split | adopt with rewrite | use as structural pattern only | Correct repo needs its own settings, package path, and contracts |
-| Pydantic Settings pattern | adopt with rewrite | app-local settings and redaction | Appropriate for `.env`/Compose, but names and defaults need correct-repo review |
-| SQLAlchemy sync + Alembic | adopt with rewrite | one workspace migration and repository-local tests | Matches Stage 1 complexity; no direct patch carries over |
-| Workspace schema and collision-safe slugs | adopt behavior and tests | reimplement `id/name/slug/description/timestamps` | Useful minimal ownership root without importing unrelated code |
-| Health, readiness, and system routes | adopt with rewrite | keep liveness/readiness distinction; redact output | Product readiness must not expose raw URLs or secrets |
-| Request-ID middleware/logging | adopt conceptually | implement only non-sensitive logging | Aligns with confirmed review/operability process |
-| Compose topology | adopt with rewrite | Postgres/Qdrant/Redis/API/Web with named volumes | Accepted data-role model is valid; images, env names, and build contexts need revalidation |
-| API Dockerfile | reference only | rebuild against correct package/install layout | Direct copy assumes mistaken repository structure |
-| Web workbench layout | selective reference | rebuild a workspace-first workbench | Direction is correct; source components need correct-repo ownership and QA |
-| Prototype `academic_companion/webui` | selective reference | reuse only small streaming/Markdown ideas later | It is chat-first and outside Stage 1 scope |
-| Prototype FastAPI chat routes | do not adopt in Stage 1 | leave in `academic_companion` | Chat/SSE lacks approved product spec and safe product defaults |
-| Prototype knowledge status route | reject | replace with redacted product readiness | It exposes Qdrant URL and conflates operational detail with product API |
-| Prototype chapter scanner | defer behind adapter | later catalog capability after ownership design | Bundled data is test material, not product facts |
-| Wrong-repo Stage 1 tests | reuse scenarios, not files | write fresh product contract tests | Test intent is valuable; imports and fixtures are baseline-specific |
-| Wrong-repo Stage 1 docs/runbook | superseded | use this stage's spec/ADR and write fresh runbook | Legacy wording and paths must not define correct repo |
+| `apps/api` 目录分离 | 采用 | 在 `apps/api/learn_platform_api` 重建 | 保持 framework/product 边界，同时使用本仓库自己的名称 |
+| FastAPI app factory 与 router 分层 | 采用并重写 | 仅用作结构模式 | 正确仓库需要自己的 settings、包路径与合约 |
+| Pydantic Settings 模式 | 采用并重写 | 应用本地 settings 与脱敏 | 适合 `.env`/Compose，但名称和默认值需重新评审 |
+| SQLAlchemy sync + Alembic | 采用并重写 | 一个 workspace migration 与本仓库测试 | 与 Stage 1 复杂度匹配；不直接搬运补丁 |
+| Workspace schema 与防碰撞 slug | 采用行为和测试 | 重实现 `id/name/slug/description/timestamps` | 有价值的最小所有权根，不引入无关代码 |
+| Health、readiness、system 路由 | 采用并重写 | 保留存活/就绪区分，输出脱敏 | 产品 readiness 不能暴露原始 URL 或 secret |
+| Request-ID middleware/logging | 概念性采用 | 仅实现非敏感日志 | 与已确认的 review/可运维流程一致 |
+| Compose 拓扑 | 采用并重写 | Postgres/Qdrant/Redis/API/Web 与 named volumes | 数据职责模型有效；镜像、环境变量与构建上下文须重验 |
+| API Dockerfile | 仅参考 | 针对正确包/安装布局重建 | 直接复制会假定误仓库结构 |
+| Web workbench 布局 | 选择性参考 | 重建 workspace-first workbench | 方向正确；源码组件需建立正确仓库所有权并 QA |
+| 原型 `academic_companion/webui` | 选择性参考 | 未来仅复用少量 streaming/Markdown 思路 | 它是 chat-first，超出 Stage 1 范围 |
+| 原型 FastAPI chat 路由 | Stage 1 不采用 | 保留于 `academic_companion` | chat/SSE 尚无已批准产品 spec，也没有安全默认值 |
+| 原型 knowledge status 路由 | 拒绝 | 用脱敏的产品 readiness 替代 | 它暴露 Qdrant URL，并混淆运行细节与产品 API |
+| 原型 chapter scanner | 延后，通过 adapter | 所有权设计完成后再作为 catalog capability | 内置数据是测试材料，不是产品事实 |
+| 误仓库 Stage 1 测试 | 复用场景，不复用文件 | 编写新的产品合约测试 | 测试意图有价值，import 与 fixture 则依赖特定基线 |
+| 误仓库 Stage 1 文档/runbook | 已取代 | 使用本 Stage spec/ADR，并编写新的 runbook | 历史文字和路径不得定义正确仓库 |
 
-## Required Reanalysis Before Any Copy
+## 复制前必须重新分析
 
-1. Verify dependency versions and lockfile policy against the 0R-A baseline.
-2. Verify API names and response schemas against this Stage 1 spec.
-3. Verify Docker build contexts and Windows-friendly local commands.
-4. Verify database migration naming and fresh-Postgres upgrade behavior.
-5. Verify Web accessibility, responsive layout, and absence of a chat-first first view.
-6. Record OCR review after substantive code changes.
+1. 依据 0R-A 基线确认依赖版本和 lockfile 策略。
+2. 依据本 Stage 1 spec 确认 API 名称和 response schema。
+3. 确认 Docker build context 与 Windows 友好的本地命令。
+4. 确认 migration 命名和干净 Postgres 的升级行为。
+5. 确认 Web 无障碍、响应式布局，以及首屏不是 chat-first。
+6. 在实质性代码变更后记录 OCR review。
 
-No row authorizes copying code unchanged. It authorizes only the specified implementation approach after the Stage 1 spec and ADR are accepted.
+矩阵中的任何一项都不授权原样复制代码。它只在 Stage 1 spec 与 ADR 被接受后，授权采用指定的实现方式。
