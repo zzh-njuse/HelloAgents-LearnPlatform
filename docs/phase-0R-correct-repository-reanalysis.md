@@ -2,7 +2,7 @@
 
 日期：2026-07-10
 
-状态：分析基线，等待人工确认
+状态：架构 gate 已确认，进入文档与验证阶段
 
 ## 1. 分析方法
 
@@ -136,20 +136,17 @@ data/                  内置种子知识库，不是用户上传目录
 
 关键点不是是否使用 `apps/` 这个名字，而是产品状态、权限、持久化和部署不得继续隐藏在 demo 入口里。
 
-## 5. 内置知识库与用户资料必须分层
+## 5. 已有八股与 LeetCode 数据的定位
 
-正确仓库已有八股与 LeetCode 数据，高层文档主要讨论用户上传资料。二者不能简单塞入同一生命周期。
+正确仓库已有的八股与 LeetCode 数据定位为现成测试、评测和演示材料，不作为新产品数据模型的设计中心。
 
-建议区分：
+约束如下：
 
-| 类型 | 所有者 | 生命周期 | 用途 |
-|---|---|---|---|
-| system corpus | deployment/system | 随版本或管理员更新 | 八股、LeetCode、平台公共 Skill 数据 |
-| workspace corpus | workspace/user | 上传、版本、软删除、重试 | 用户 PDF、Markdown、课程资料、笔记 |
-| generated corpus | workspace | 跟随 lesson/exercise 版本 | 课程内容、讲解、练习和总结 |
-| memory corpus | user/workspace | 可查看、可纠正、可删除 | 偏好、掌握度、学习事件摘要 |
-
-检索请求必须显式声明 scope，并在返回 citation 时标明来源类型。是否使用一个 Qdrant collection 可以后续决定，但 payload 与产品服务必须能区分这些边界。
+- Stage 0R 不为这些数据单独设计所有权、版本、删除或权限模型。
+- Stage 1 不要求把这些数据接入产品数据库。
+- Stage 2 设计用户上传资料时，以真实 workspace 文档生命周期为准，不让已有题库格式反向决定 schema。
+- 需要验证 RAG、citation、课程或练习能力时，可以选取少量现有数据作为 fixture。
+- gitlink、许可和完整数据分发问题记录为仓库维护事项，但不阻塞产品分层和 Stage 1 文档工作。
 
 ## 6. 对现有原型的重新定位
 
@@ -179,9 +176,8 @@ data/                  内置种子知识库，不是用户上传目录
 - 高层目标文档带 provenance 导入。
 - 历史 Phase 与新 Platform Stage 命名分开。
 - 明确 framework、domain capability、product app 三层职责。
-- 明确 system/workspace/generated/memory 四类 corpus。
 - 建立可复现依赖与测试基线。
-- 修复数据 gitlink 的干净 clone 可恢复性，并完成数据许可核查。
+- 记录八股/LeetCode 为非阻断的测试与演示资产。
 
 ### Platform Stage 1：最小产品壳
 
@@ -195,28 +191,28 @@ Stage 1 只证明：
 
 ### Platform Stage 2：资料生命周期与引用检索
 
-在 Stage 1 稳定后再定义上传、版本、解析、chunk、embedding、索引、删除、重试和 citation。此时必须同时覆盖 system corpus 与 workspace corpus，而不是只按误仓库的空数据假设设计。
+在 Stage 1 稳定后再定义上传、版本、解析、chunk、embedding、索引、删除、重试和 citation。产品合同以 workspace 用户资料为中心；八股/LeetCode 只作为可选 fixture 验证该合同。
 
-## 8. 需要人工确认的架构 gate
+## 8. 已确认的架构 gate
 
-进入任何阶段 1 代码前，需要确认：
+2026-07-10 已人工确认：
 
-1. 接受“学习平台而非双模式聊天应用”作为主产品定位。
-2. 接受 `hello_agents` / `academic_companion` / product app 三层模型。
-3. 接受 Postgres 为产品事实来源，Qdrant 为可重建索引，Redis 为非权威队列。
-4. 接受现有 Web/API 是待固化和吸收的原型，而不是最终入口。
-5. 接受内置八股/LeetCode 与用户上传资料采用不同所有权和生命周期。
-6. 接受 Legacy Phase 与 Platform Stage 双命名，避免修改历史文档含义。
-7. 接受误仓库阶段 1 代码暂时仅作为参考，待 Stage 1 spec/ADR 确认后再选择迁移方式。
+1. 主产品定位为学习平台，而不是双模式聊天应用。
+2. 采用 `hello_agents` / `academic_companion` / product app 三层模型；前两层主要视为可复用已有资产。
+3. Postgres 是产品事实来源，Qdrant 是可重建索引，Redis 是非权威队列。
+4. `academic_companion/api` 与 `academic_companion/webui` 是待固化、吸收的原型，不是最终产品入口。
+5. 八股/LeetCode 作为测试与演示材料，不为其做针对性产品设计，也不让其决定用户资料 schema。
+6. 使用 Legacy Phase 与 Platform Stage 双命名，不修改历史文档含义。
+7. 误仓库阶段 1 代码仅作为参考；先完成文档，Stage 1 spec/ADR 确认后再决定采用方式。
 
 ## 9. 下一步只做什么
 
-在 gate 确认前，下一步仍然是文档和验证工作：
+gate 已确认，下一步仍然限定为文档和验证工作：
 
 1. 编写正确仓库版 Platform Stage 0R spec，记录上述完成条件。
 2. 编写产品边界 ADR，确认三层模型与 prototype 兼容期。
 3. 建立依赖安装与测试基线，不修业务行为。
-4. 设计数据来源/许可与 gitlink 恢复方案。
+4. 把数据 gitlink/许可问题记录为非阻断仓库维护项。
 5. 为现有 learning/research/SSE 原型补 contract inventory，作为后续迁移验收依据。
 
 完成这些工作后，才重新制定 Stage 1 实施矩阵。首次双仓审计中的迁移矩阵继续保留，但不直接执行。
