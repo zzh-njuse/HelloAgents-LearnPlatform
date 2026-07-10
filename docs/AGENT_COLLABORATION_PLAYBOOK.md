@@ -151,13 +151,49 @@ Stage 1 建立后，应分别记录：
 
 ### 独立 review
 
-以下情况使用 OCR 或其他独立代码审查：
+OCR/OpenCodeReview 是本项目已经部署的独立代码评审工具。它用于补充 Codex self-review，尤其关注安全暴露、输入边界、容器、部署和测试缺口。
+
+以下情况进入 OCR gate：
 
 - Stage 末或较大 diff。
 - schema、删除、权限和部署变更。
 - 容器、安全暴露或输入边界。
 
-review finding 是建议，不是自动命令。按采纳、暂缓、拒绝分类；暂缓项进入阶段总结。避免无限 review loop。
+文档-only 和小型低风险修改默认不运行真实 OCR。真实 review 会调用 OCR 自己配置的 LLM provider，未经用户要求或明确批准不运行。
+
+标准预检：
+
+```powershell
+git status --short
+git diff --stat
+where.exe ocr
+ocr version
+ocr review --preview
+```
+
+准备运行真实 review 时再检查 provider：
+
+```powershell
+ocr llm test
+```
+
+真实 review：
+
+```powershell
+ocr review --audience agent --background "brief business context"
+```
+
+确认 review 范围和 provider 成本后，大 diff 可使用：
+
+```powershell
+ocr review --audience agent --concurrency 4 --timeout 15 --background "brief business context"
+```
+
+如果 `ocr` 不在 PATH，查找 `%USERPROFILE%\bin\ocr.exe`。不得在命令、文档或日志中写入 OCR provider key。
+
+finding 按 High/Medium/Low 分类。High 优先修复；Medium 结合上下文决定；Low 不盲改。暂缓或拒绝项记录原因并进入阶段输入。修复后运行正常测试，只有实质修复时才考虑一次复审，避免无限 review loop。
+
+Stage 级 OCR 记录放入当前 Stage `reviews/`，至少包含：背景、命令、审查范围、finding、采纳/暂缓项和复验结果。OCR 命令超时后检查残留进程，避免继续消耗 provider quota。
 
 ## 9. 人工 Gate
 
@@ -216,6 +252,7 @@ Platform Stage 0R 只进行：
 
 相关文档：
 
+- [仓库级 Agent 规则](../AGENTS.md)
 - [文档索引](./README.md)
 - [学习平台蓝图](./LEARNING_AGENT_BLUEPRINT.md)
 - [开发路线](./SELF_HOST_DEVELOPMENT_ROADMAP.md)

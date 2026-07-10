@@ -15,10 +15,12 @@ Stage 0R 不迁移误仓库业务代码，也不开始 Stage 1 平台实现。
 - Spec：`specs/001-correct-repository-baseline-reconstruction.md`
 - ADR：`adr/001-product-layer-and-dependency-boundaries.md`
 - 现状评估与重新计划：`CURRENT_STATE_AND_REPLAN.md`
+- Review 记录模板：`reviews/README.md`
 - 产品蓝图：`../LEARNING_AGENT_BLUEPRINT.md`
 - 开发路线：`../SELF_HOST_DEVELOPMENT_ROADMAP.md`
 - 数据库与部署：`../DATABASE_AND_DEPLOYMENT_PLAN.md`
 - 协作流程：`../AGENT_COLLABORATION_PLAYBOOK.md`
+- 仓库级规则：`../../AGENTS.md`
 - 历史总结：`../history/LEGACY_AND_RECOVERY_SUMMARY.md`
 
 ## 已确认方向

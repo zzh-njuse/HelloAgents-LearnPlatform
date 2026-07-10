@@ -9,6 +9,8 @@
 - [数据库与部署计划](./DATABASE_AND_DEPLOYMENT_PLAN.md)
 - [Agent 协作开发流程](./AGENT_COLLABORATION_PLAYBOOK.md)
 
+仓库级、可被 coding agent 自动加载的执行规则位于根目录 [AGENTS.md](../AGENTS.md)。
+
 ## 当前阶段
 
 - [Platform Stage 0R：正确仓库基线重建](./00R-platform-baseline-reconstruction/README.md)

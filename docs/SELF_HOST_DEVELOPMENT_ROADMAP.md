@@ -103,27 +103,44 @@
 
 ### 建议范围
 
-- PDF、Markdown、纯文本的第一版上传和解析。
 - document/version/chunk/job/citation 数据模型。
-- local storage adapter。
-- Redis 队列与 worker。
-- embedding adapter 和 Qdrant workspace filter。
+- local storage、Redis worker、embedding 和 Qdrant workspace filter。
 - 失败状态、显式重试、软删除和索引重建。
-- Ingestion Center 与引用片段页面。
-- 离线 fixture tests 和一次显式真实 provider smoke。
+- Ingestion Center、引用片段和资料问答页面。
+- 离线 fixture tests 和显式真实 provider smoke。
 
-### 明确不做
+### 两个交付切片
 
-- 万能 parser、OCR、Office 和网页批量导入。
-- 完整自然语言课程或练习闭环。
-- 为现有八股/LeetCode 设计专用模型。
+**切片 1：单文件资料管线**
+
+- 支持单个 PDF、Markdown 或纯文本文件。
+- 完成上传、异步解析、分块、Postgres 持久化、embedding 和 Qdrant 索引。
+- `rag/query` 只返回检索结果与引用，不调用 LLM 生成答案。
+- 建立最小 query trace 和 RAG eval。
+
+**切片 2：批量上传与带引用答案**
+
+- 增加批量上传；每个文件创建独立 document/version/job，可独立失败和重试。
+- 在切片 1 稳定检索链路上增加带引用的 LLM 自然语言答案。
+- 完成 Stage 2 Web 资料问答体验和引用定位。
+
+### Stage 2 整体非目标
+
+- 不生成章节化课程页、知识图谱或练习题。
+- 不实现长期学习记忆、多用户鉴权或 Neo4j。
+- 不把聊天框作为唯一产品入口。
+- 不把 Qdrant 当作 chunk 正文或业务状态的唯一来源。
+- 不为现有八股/LeetCode 设计专用模型。
+
+Office、图片 OCR、网页/Git 导入和更广泛 parser 不属于已确认的两个核心切片，但不是永久排除项。核心切片稳定后，可通过新的 parser extension slice 和 ADR 决定放在 Stage 2 后续还是后续 Stage。
 
 ### 完成 Gate
 
 - 一份小资料可从上传走到 ready。
+- 批量上传时每个文件有独立状态和重试语义。
 - Postgres、storage 和 Qdrant 职责符合 ADR。
 - 删除后默认检索不再返回资料。
-- citation 可定位到 document version 和 chunk。
+- 检索和自然语言答案的 citation 可定位到 document version 和 chunk。
 - worker 失败可见、可重试。
 
 ## 6. Platform Stage 3：章节化学习与 Tutor
