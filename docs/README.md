@@ -17,6 +17,9 @@
 - [Stage 0R Spec](./00R-platform-baseline-reconstruction/specs/001-correct-repository-baseline-reconstruction.md)
 - [产品分层 ADR](./00R-platform-baseline-reconstruction/adr/001-product-layer-and-dependency-boundaries.md)
 - [现状评估与重新计划](./00R-platform-baseline-reconstruction/CURRENT_STATE_AND_REPLAN.md)
+- [0R-A Dependency And Verification Baseline](./00R-platform-baseline-reconstruction/DEPENDENCY_AND_VERIFICATION_BASELINE.md)
+- [0R-B Prototype Contract Inventory](./00R-platform-baseline-reconstruction/PROTOTYPE_CONTRACT_INVENTORY.md)
+- [Platform Stage 1: Self-Host Shell](./01-platform-stage-1-self-host-shell/README.md)
 
 ## Framework 指南
 
