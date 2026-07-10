@@ -1,226 +1,65 @@
-# 数据库与部署形态开发计划
+# 数据库与部署计划
 
-版本日期：2026-07-08
+版本日期：2026-07-10
 
-目标：把当前 demo 里的分散持久化能力，收束成一个可开发、可自托管、后续可演进到 hosted service 的数据架构。
+状态：当前架构指导文档
 
-## 1. 当前仓库真实情况
+## 1. 当前事实
 
-当前项目还没有平台级业务数据库。已有的是 agent 框架层的存储能力：
+正确仓库当前没有 product Postgres、Redis、Alembic、Docker Compose 或 `apps/` 产品层。
 
-| 存储 | 当前代码位置 | 当前用途 | 主要问题 |
-|---|---|---|---|
-| SQLite | `hello_agents/memory/storage/document_store.py` | 作为部分记忆的权威存储，默认写入 `./memory_data/memory.db` | 表结构偏 memory demo，不适合作为平台业务库 |
-| Qdrant | `hello_agents/memory/storage/qdrant_store.py` | 存 memory 向量、RAG chunk 向量 | 是检索索引，不应承担业务事实来源 |
-| Neo4j | `hello_agents/memory/storage/neo4j_store.py` | 语义记忆里的实体和关系 | 依赖重，第一版产品不应强依赖 |
-| 本地文件目录 | `RAGTool.knowledge_base_path`，默认 `./knowledge_base` | `add_text` 会落成 markdown 文件，文档解析也依赖原始文件路径 | 缺少文件版本、归属、删除、引用定位和权限模型 |
-| 环境变量 | `hello_agents/core/database_config.py` | Qdrant/Neo4j 连接配置 | 缺少平台层数据库配置和统一配置入口 |
+已有存储能力：
 
-一个很重要的判断：当前的 SQLite/Qdrant/Neo4j 是框架能力演示，不是未来产品的数据底座。后续要保留它们的经验，但需要新建平台层数据模型。
+- `hello_agents/storage/qdrant_store.py`：Qdrant vector store。
+- `hello_agents/memory/storage/document_store.py`：包括 SQLiteDocumentStore 在内的 memory 存储抽象。
+- `hello_agents/memory/storage/neo4j_store.py`：可选图存储能力。
+- `academic_companion/memory_extensions`：UserModel 和 research notes 本地持久化。
+- `memory/`、`memory_data/`：本地运行数据，已忽略，不是产品数据库。
+- `data/`：内置测试与演示材料，不是用户上传目录。
 
-## 2. 核心原则
+当前 `.env.example` 和根 `pyproject.toml` 面向 framework/demo。未来 product app 必须有独立、清晰的依赖和配置边界。
 
-第一版必须把“权威数据”和“派生索引”分清楚：
+## 2. 已确认原则
 
-- Postgres 业务库：self-host 正式主路径的事实来源。用户、workspace、资料、chunk 元数据、课程、练习、学习记录、agent run、成本、任务状态都以它为准。
-- SQLite：保留为 demo/dev/local-only 可选模式，不作为第一版 self-host 主路径承诺。
-- Object storage/本地 volume：原始文件和解析后的规范化文本。文件不是数据库字段的附属品，而是可版本化资产。
-- Qdrant：向量索引。它可以删除重建，不作为唯一事实来源。
-- Redis：队列和短期缓存。它可以丢，不作为事实来源。
-- Neo4j：后置可选图索引。第一版用关系表表达概念和边，等查询需求稳定再引入 Neo4j。
-
-第一版要避免“每个能力都上一个数据库”。数据库越多，部署越重，开源用户越容易卡死在安装阶段。
-
-## 3. 推荐产品形态
-
-我建议把项目第一目标定为“开源自托管学习 agent 平台”，而不是一上来做 SaaS。
-
-原因：
-
-1. 成本和隐私压力小。用户自己提供 LLM key、数据库和文件存储，你不需要立刻处理计费、合规、滥用、数据泄漏。
-2. 面试叙事更自然。你能展示 Docker Compose、schema migration、任务队列、可观测性，而不是只展示网页 demo。
-3. 对学习资料更友好。用户上传的课程 PDF、笔记、代码往往有版权或隐私，自托管更容易被接受。
-4. 开发闭环更短。先让本机和 VPS 跑起来，再考虑 hosted service。
-
-推荐三种部署档位：
-
-| 档位 | 面向用户 | 数据库形态 | 目标 |
-|---|---|---|---|
-| Demo/dev mode | 面试、本机体验、快速开发 | SQLite + 本地文件 + 可选 Qdrant | 低门槛试用，不作为正式 self-host 主路径 |
-| Self-host mode | 开源主路径 | Docker Compose: Postgres + Qdrant + Redis + 本地 volume/MinIO | 用户拉取后自行配置，真正可长期使用 |
-| Hosted mode | 未来服务化 | 托管 Postgres + Qdrant Cloud/自托管 + S3/R2/OSS + Redis | 你作为服务提供者运营多租户服务 |
-
-第一版主推 Self-host mode。Demo/dev mode 只做快速体验和开发便利，Hosted mode 只在架构上预留。
-
-## 4. 作为服务提供者时，数据库是什么
-
-如果未来你提供 hosted service，你实际运营的是：
-
-- `Postgres`：权威业务库。最重要。
-- `Qdrant`：向量检索索引。按 workspace 过滤。
-- `Object storage`：原始文件、解析文本、导出包、日志附件。
-- `Redis`：队列、任务锁、短缓存。
-- `Observability storage`：可以先放 Postgres，后续再接 Prometheus/Loki/OpenTelemetry。
-
-你不应该直接把用户的学习资料只塞进向量库。正确顺序是：
-
-1. 原始文件进 object storage。
-2. 文件元数据和任务状态进 Postgres。
-3. 解析后的 markdown/text 进 object storage，必要的 chunk 内容和定位信息进 Postgres。
-4. embedding 后的向量和检索 payload 进 Qdrant。
-5. 课程、练习、学习记录、记忆、成本和 trace 都进 Postgres。
-
-这样 Qdrant 出问题时，可以从 Postgres + object storage 重建索引；用户删除资料时，也能做完整可审计删除。
-
-## 5. 用户提供什么数据，分别怎么存
-
-### 5.1 用户身份和配置
-
-| 数据 | 存放 | 说明 |
+| 组件 | 角色 | 权威性 |
 |---|---|---|
-| 用户账号、邮箱、昵称 | Postgres `users` | Self-host 可先单用户或本地账号 |
-| workspace 成员和角色 | Postgres `workspace_members` | Hosted mode 必须有 |
-| 用户偏好 | Postgres `user_settings` | 语言、学习风格、默认模型 |
-| LLM provider 配置 | 环境变量优先；Hosted 才入库加密 | 开源自托管建议用 `.env`，不要把 API key 默认写 DB |
-| 用户本地 UI 状态 | 浏览器 localStorage | 只存主题、折叠状态、最近页面，不存学习资料正文 |
+| Postgres | 产品业务数据库 | 权威事实来源 |
+| Local/object storage | 原始文件和派生大文本 | 文件字节来源 |
+| Qdrant | embedding 与检索 payload | 可重建派生索引 |
+| Redis | 队列、锁、缓存、限流 | 非权威 |
+| SQLite | framework demo、快速测试或未来 local-only 模式 | 非正式 self-host 主路径 |
+| Neo4j | 未来可选概念图 adapter | 非默认依赖 |
 
-### 5.2 用户上传资料
+第一产品形态是 self-host。用户通过 Docker Compose 启动服务，并自行提供 LLM/embedding 凭据。
 
-| 数据 | 存放 | 说明 |
-|---|---|---|
-| 原始 PDF/Markdown/代码/图片 | Object storage 或本地 volume | 路径由 `source_documents.storage_uri` 引用 |
-| 文件 hash、大小、类型、状态 | Postgres `source_documents` | 去重、重试、删除、版本管理 |
-| 解析后的 markdown/text | Object storage | 可重用、可下载、可重新 chunk |
-| 解析质量报告 | Postgres `document_parse_reports` | 乱码、空页、低文本密度、表格丢失 |
-| chunk 内容和定位 | Postgres `document_chunks` | `source_span`、`heading_path`、`content_hash` |
-| chunk embedding | Qdrant | payload 带 `workspace_id`、`document_id`、`chunk_id` |
+## 3. 产品数据所有权
 
-### 5.3 平台生成内容
+### 3.1 Postgres
 
-| 数据 | 存放 | 说明 |
-|---|---|---|
-| 知识点 | Postgres `concepts` | 名称、解释、重要程度、难度 |
-| 知识点关系 | Postgres `concept_edges` | 先修、相关、包含、易混 |
-| 课程章节树 | Postgres `course_sections` | 有版本和发布状态 |
-| 学习页正文 | Postgres `lessons` 或 object storage + DB metadata | 长正文可放 storage，DB 存版本和引用 |
-| 引用关系 | Postgres `lesson_citations` | lesson/exercise 到 chunk 的可审计链接 |
-| 练习题、答案、讲解 | Postgres `exercises` | 题型、难度、rubric、来源 |
-| 生成质量评分 | Postgres `generation_evaluations` | 是否可发布，失败原因 |
+Postgres 保存 workspace、资料生命周期、后台任务、课程、练习、产品 memory、trace、eval 和成本等业务事实。
 
-### 5.4 用户学习过程
+Postgres 不保存大型原始文件 blob，除非后续 ADR 明确改变策略。
 
-| 数据 | 存放 | 说明 |
-|---|---|---|
-| 阅读、提问、答题、复习事件 | Postgres `learning_events` | 时间线和分析来源 |
-| 答题记录 | Postgres `exercise_attempts` | 原始答案、得分、反馈 |
-| 掌握度 | Postgres `concept_mastery` | workspace/user/concept 维度 |
-| 错题本 | Postgres `review_items` | 可由答题记录派生，也可以单独建表 |
-| 学习记忆 | Postgres `memories` + 可选 Qdrant | 稳定画像和长期记忆要可见、可删 |
+### 3.2 文件存储
 
-### 5.5 Agent 运行和工程可观测性
-
-| 数据 | 存放 | 说明 |
-|---|---|---|
-| agent run | Postgres `agent_runs` | 输入摘要、输出摘要、状态、耗时 |
-| tool call | Postgres `tool_calls` | 工具名、参数摘要、结果摘要、错误 |
-| token 和成本 | Postgres `cost_events` | provider、model、tokens、估算价格 |
-| 后台任务 | Postgres `jobs` + Redis queue | Postgres 记录状态，Redis 执行调度 |
-| eval cases/results | Postgres | 面试展示质量体系 |
-| OCR/CR 审查记录 | Postgres `code_review_runs/findings` | 开发协作流程的证据 |
-
-## 6. 用户数据有没有必要存在用户本地
-
-有可能，但不应该成为第一版主路径。
-
-第一版“本地”的推荐含义是 self-host：用户把服务、数据库和文件 volume 部署在自己的机器或 VPS 上。这样已经满足隐私和可控性，同时工程复杂度可控。
-
-不建议第一版做真正 browser-local 或桌面本地数据库，原因：
-
-- 资料解析、embedding、任务队列和大文件管理不适合只放浏览器。
-- 浏览器本地存储容量和可靠性都不够。
-- 本地与云同步会引入冲突解决、加密、备份、版本合并，复杂度过早。
-
-可以预留一个后续模式：
-
-| 模式 | 本地存什么 | 适合阶段 |
-|---|---|---|
-| Browser cache | UI 状态、最近打开章节、草稿 | 立即可做 |
-| Self-host local volume | 原始文件、解析文本、Postgres volume、Qdrant volume | 第一版主路径 |
-| Local-only desktop | SQLite/DuckDB + Qdrant local + Ollama | 后续隐私增强版 |
-| Hybrid | 敏感资料本地，生成摘要同步云端 | 很后期 |
-
-## 7. 第一版最小数据库方案
-
-为了开源自托管容易，我建议第一版标准 Compose 只包含：
-
-- `api`: FastAPI
-- `web`: React/Vite 或 Next.js
-- `worker`: 后台任务
-- `postgres`: 权威业务库
-- `qdrant`: 向量索引
-- `redis`: 队列和锁
-- `storage`: 先用本地 volume，后续可换 MinIO/S3
-
-Neo4j 暂不进入默认 Compose。概念图谱先用 Postgres 表：
+第一版使用本地 volume，通过 storage adapter 访问：
 
 ```text
-concepts
-concept_edges
-section_concepts
-document_concepts
+storage/
+  workspaces/<workspace_id>/
+    documents/<document_id>/
+      versions/<version_id>/
+        original.<ext>
+        parsed/content.md
+        parse-report.json
+  exports/
 ```
 
-等概念关系查询变复杂，再加 Neo4j adapter，把 Postgres 中的概念和边同步过去。
+数据库只保存相对 storage URI、hash、MIME type、大小和状态，不保存宿主机绝对路径。后续切换到 S3/MinIO/OSS 时替换 adapter，不改变核心业务关系。
 
-## 8. 建议的首批表
+### 3.3 Qdrant
 
-第一批不要建太多，但要把生命周期闭环跑通：
-
-```text
-users
-workspaces
-workspace_members
-source_documents
-document_versions
-document_parse_reports
-document_chunks
-ingestion_jobs
-concepts
-concept_edges
-course_sections
-lessons
-lesson_citations
-exercises
-exercise_attempts
-learning_events
-memories
-agent_runs
-tool_calls
-cost_events
-eval_cases
-eval_results
-```
-
-其中最先实现的最小闭环可以只有：
-
-```text
-users
-workspaces
-source_documents
-document_chunks
-ingestion_jobs
-course_sections
-lessons
-agent_runs
-tool_calls
-cost_events
-```
-
-按照最新大阶段路线，练习和记忆进入阶段 4；eval、成本和质量指标进入阶段 5。阶段 2/3 只保留支撑资料管线和章节体验所必需的最小表，避免过早扩大 schema。
-
-## 9. Qdrant 设计
-
-Qdrant 第一版使用单 collection + payload 过滤：
+Qdrant 只保存 vector 和检索所需的最小 payload，例如：
 
 ```json
 {
@@ -228,119 +67,187 @@ Qdrant 第一版使用单 collection + payload 过滤：
   "document_id": "...",
   "document_version_id": "...",
   "chunk_id": "...",
-  "chunk_type": "source|lesson|exercise|memory",
-  "source_path": "...",
   "heading_path": "...",
-  "start": 123,
-  "end": 456,
   "content_hash": "...",
-  "permission_scope": "workspace"
+  "chunk_type": "source|lesson|exercise|memory"
 }
 ```
 
-不要每个用户一个 collection。那样 demo 好理解，但后续索引管理、迁移、监控都会更麻烦。真正需要强隔离时，可以 hosted enterprise mode 再做 per-tenant collection。
+约束：
 
-关键约束：
+- 用户资料检索必须带 workspace filter。
+- citation 正文和删除状态以 Postgres/storage 回读为准。
+- collection 名称和向量维度是显式配置合同。
+- 维度变化需要显式 rebuild，不静默创建不兼容索引。
+- Qdrant 不保存唯一 chunk 正文或唯一删除状态。
 
-- Qdrant payload 中必须有 `workspace_id`。
-- 所有检索必须带 workspace filter。
-- 删除文档时，先标记 Postgres 状态，再按 `document_id/version_id` 删除 Qdrant 向量。
-- Qdrant 可重建，所以不要只在 Qdrant 里保存 chunk 正文。
+是否使用单 collection 在 Stage 2 ADR 确认；Stage 1 不提前建立产品 collection。
 
-## 10. 文件存储设计
+### 3.4 Redis
 
-Self-host 第一版可以先用本地目录：
+Redis 传输 job，不拥有 job 事实。推荐语义：
+
+1. API 先提交 Postgres 业务记录和 job。
+2. 提交后 enqueue。
+3. enqueue 失败时保留 job 并标记 `queue_failed`。
+4. 显式 retry 重新 enqueue 同一业务 job。
+5. worker 使用业务 job ID 保证幂等。
+
+Stage 1 只启动 Redis 和 readiness；worker 在 Stage 2 引入。
+
+## 4. 分阶段 Schema
+
+### Stage 1：最小产品壳
+
+只建立平台壳真正需要的表：
 
 ```text
-data/
-  uploads/
-    <workspace_id>/<document_id>/<version_id>/original.<ext>
-  parsed/
-    <workspace_id>/<document_id>/<version_id>/content.md
-  exports/
-  logs/
+workspaces
 ```
 
-数据库只保存 URI、hash、mime type、大小、解析状态，不保存大文件 blob。
+如最小 capability adapter 需要记录执行，可增加受限的 `agent_runs`，但必须由 Stage 1 spec 证明必要性。不要为了“以后可能用到”一次建立全部 schema。
 
-后续迁移到 S3/R2/OSS/MinIO 时，只需要替换 storage adapter，不改业务表。
+### Stage 2：资料生命周期
 
-## 11. 开源用户自行配置数据库是否更容易
+```text
+source_documents
+document_versions
+document_parse_reports
+document_chunks
+ingestion_jobs
+rag_query_traces
+```
 
-是，而且应该作为第一版主路径。但要注意“自行配置”不能等于“让用户自己理解所有数据库”。
+document 属于 workspace，version 不覆盖历史版本，chunk 属于明确 version，job 有稳定业务 ID、状态、尝试次数和错误码。
 
-推荐体验：
+### Stage 3：章节学习
 
-1. `git clone`
-2. 复制 `.env.example` 为 `.env`
-3. 填 LLM provider key
-4. `docker compose up -d`
-5. 打开 Web UI
+```text
+courses
+course_sections
+lessons
+lesson_versions
+lesson_citations
+```
 
-数据库默认由 Compose 创建：
+### Stage 4：练习与记忆
 
-- Postgres 默认账号密码在 `.env`。
-- Qdrant 默认本地 volume。
-- Redis 默认本地。
-- 文件默认本地 volume。
+```text
+concepts
+concept_edges
+exercises
+exercise_attempts
+learning_events
+concept_mastery
+review_items
+memories
+```
 
-用户可以进阶替换：
+### Stage 5：质量与成本
 
-- `DATABASE_URL=postgresql://...`
-- `QDRANT_URL=...`
-- `QDRANT_API_KEY=...`
-- `STORAGE_BACKEND=s3`
-- `S3_BUCKET=...`
+```text
+agent_runs
+tool_calls
+eval_cases
+eval_results
+cost_events
+```
 
-这比一开始做 hosted service 容易，也更适合作为开源主项目。
+表名和字段只在对应 Stage spec/ADR 中成为正式合同。
 
-## 12. Hosted service 的预留点
+## 5. Existing assets 的处理
 
-虽然第一版主推 self-host，但 schema 设计要预留 hosted：
+### `academic_companion` memory
 
-- 所有业务表必须有 `workspace_id` 或能通过外键追到 workspace。
-- 所有用户可见资源必须有 owner/workspace 权限判断。
-- `source_documents` 要有删除状态和删除时间。
-- API key 不明文入库；Hosted mode 使用加密字段或外部 secret manager。
-- `agent_runs` 和 `tool_calls` 只存参数摘要，敏感正文可脱敏或单独加密。
-- 成本事件必须按 workspace 聚合。
-- 导出和删除要能按 workspace 全量执行。
+当前 UserModel、research notes 和本地 memory 保留为 prototype 能力。Stage 1 不迁移其数据。产品 memory schema 在 Stage 4 设计，并明确兼容或导入策略。
 
-## 13. 开发顺序
+### 八股与 LeetCode
 
-推荐从数据库开始的实际开发顺序：
+它们是 fixture/eval 材料，不要求导入 product Postgres，不建立专用 workspace 或删除模型。可以抽取少量样本验证 Stage 2/3/4 合同。
 
-1. 写 ADR：第一版采用 self-host Docker Compose，Postgres 为权威业务库，Qdrant 为派生索引，Neo4j 后置。
-2. 新建 `apps/api`，接入配置系统，支持 `DATABASE_URL`、`QDRANT_URL`、`STORAGE_ROOT`。正式 self-host 默认使用 Postgres；SQLite 仅作为 demo/dev 便利模式。
-3. 引入 Alembic，创建首批最小表。
-4. 实现 storage adapter：先 local filesystem。
-5. 实现 document ingestion job：上传文件 -> 记录 `source_documents` -> 解析 -> 写 parsed file -> 写 `document_chunks` -> 写 Qdrant。
-6. 实现删除/重建索引：从 Postgres 和 storage 重建 Qdrant，而不是依赖 Qdrant 自身。
-7. 给 ingestion 做 trace：`agent_runs`、`tool_calls`、`cost_events`。
-8. 再做 Course Reader 的最小页面。
+### 现有 Qdrant 数据
 
-资料管线阶段第一张真正该写的 spec 建议是：
+现有 `cs_fundamentals`、`leetcode`、research notes 等 collection 属于 prototype/runtime 数据。新 product collection 不复用其事实语义，除非 Stage 2 ADR 明确兼容方案。
 
-`docs/03-stage-2-material-ingestion/specs/001-storage-and-ingestion.md`
+## 6. 配置边界
 
-在此之前，阶段 1 应先写平台骨架 spec，例如：
+根 `.env.example` 继续描述 `hello_agents` 和 `academic_companion` demo 所需的 LLM、embedding、Qdrant、Neo4j 等变量。
 
-`docs/02-stage-1-self-host-platform/specs/001-self-host-platform-skeleton.md`
+Stage 1 应建立独立 product settings，至少覆盖：
 
-它应该明确：
+```text
+APP_NAME
+ENVIRONMENT
+DATABASE_URL
+QDRANT_URL
+QDRANT_API_KEY
+REDIS_URL
+STORAGE_ROOT
+CORS_ORIGINS
+```
 
-- 文件上传接口。
-- 表结构。
-- 本地 storage 路径规范。
-- Qdrant payload 契约。
-- 删除和重试语义。
-- 失败状态和错误展示。
-- 测试用例。
+Stage 2 的 product embedding、collection 和 queue 配置使用明确命名空间，避免和 framework demo 的 `EMBED_*`、`QDRANT_COLLECTION` 串扰。具体前缀由 Stage 2 ADR 确认。
 
-## 14. 当前结论
+敏感配置不得通过 system info、readiness 或普通日志返回。
 
-最推荐路线：
+## 7. Docker Compose 目标
 
-> 以开源自托管为第一产品形态。用户拉取项目后用 Docker Compose 自行启动 Postgres、Qdrant、Redis 和本地文件 volume；用户自己提供 LLM key。你作为服务提供者的 hosted mode 先只做架构预留，不作为第一阶段目标。
+Stage 1 包含：
 
-这条路线最符合当前项目状态，也最适合作为面试主项目：它既不是玩具 demo，也不会过早掉进 SaaS 运营复杂度。
+```text
+postgres
+qdrant
+redis
+api
+web
+```
+
+Stage 2 增加 `worker`。Stage 1 不加入 Neo4j、MinIO、反向代理或 HTTPS。
+
+## 8. Migration 与启动
+
+- 使用 Alembic 管理 product Postgres schema。
+- migration 与 app 依赖位于 product API 边界，不进入 `hello_agents` package。
+- Stage 1 单机 Compose 可以由 API 容器在启动前执行 migration。
+- Stage 2 worker 必须等待 migration owner 完成，不并发执行 migration。
+- 后续生产化再评估独立 one-shot migration service。
+
+每个 schema 变更必须有对应 Stage spec/ADR、已有数据考虑和 migration test，不能只依赖 ORM 自动建表。
+
+## 9. 删除与重建
+
+用户资料删除的权威顺序：
+
+1. Postgres 标记删除或进入删除状态。
+2. 默认查询立即排除该资料。
+3. cleanup job 删除 Qdrant points。
+4. 根据保留策略删除 storage 文件。
+5. cleanup 失败不回滚权威删除状态，可重试和 reconciliation。
+
+索引重建从 Postgres 读取有效 version/chunk，从 storage 读取正文，重新计算 embedding，并使用稳定 chunk ID upsert Qdrant。
+
+## 10. Self-host 安全基线
+
+- `.env` 和 provider key 不提交 Git。
+- readiness 只返回组件是否可用，不返回内部 URL、绝对路径或凭据。
+- API 日志不记录上传全文、完整 prompt、API key 或 provider 原始错误正文。
+- 用户资源即使第一版单用户，也保留 workspace 外键和 filter 纪律。
+- 默认端口暴露、Redis/Qdrant auth、容器非 root 和 HTTPS 在 Stage 5 加固；Stage 1 文档必须明确本地开发边界。
+
+## 11. 备份与恢复目标
+
+权威备份至少包含 Postgres dump、storage volume 和非敏感配置模板。Qdrant 和 Redis 不作为唯一恢复来源。Stage 5 提供索引重建 runbook。
+
+## 12. 实施顺序
+
+1. Stage 0R 完成依赖/测试基线和 prototype contract inventory。
+2. Stage 1 spec/ADR 决定 product app、依赖和误仓库参考实现采用方式。
+3. 建立 workspace migration、API/Web 和 Compose。
+4. Stage 2 再建立 document/job/storage/Qdrant 合同和 worker。
+5. 后续增加 course、exercise、memory、eval 和 hardening。
+
+相关文档：
+
+- [学习平台蓝图](./LEARNING_AGENT_BLUEPRINT.md)
+- [开发路线](./SELF_HOST_DEVELOPMENT_ROADMAP.md)
+- [产品分层 ADR](./00R-platform-baseline-reconstruction/adr/001-product-layer-and-dependency-boundaries.md)

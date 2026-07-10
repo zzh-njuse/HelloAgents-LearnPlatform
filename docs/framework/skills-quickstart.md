@@ -123,7 +123,7 @@ config = Config(
 ## 检查激活状态
 
 ```bash
-python examples/check_skills_activation.py
+python examples/skills_demo.py
 ```
 
 ---
@@ -131,4 +131,3 @@ python examples/check_skills_activation.py
 ## 更多信息
 
 查看完整文档：[Skills 使用指南](./skills-usage-guide.md)
-

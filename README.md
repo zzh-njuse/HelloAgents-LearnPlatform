@@ -165,31 +165,31 @@ hello-agents/
 详细了解 HelloAgents v1.0.0 的 16 项核心能力：
 
 ### 基础设施
-- **[工具响应协议](./docs/tool-response-protocol.md)** - ToolResponse 统一返回格式
-- **[上下文工程](./docs/context-engineering-guide.md)** - HistoryManager/TokenCounter/Truncator
+- **[工具响应协议](./docs/framework/tool-response-protocol.md)** - ToolResponse 统一返回格式
+- **[上下文工程](./docs/framework/context-engineering-guide.md)** - HistoryManager/TokenCounter/Truncator
 
 ### 核心能力
-- **[可观测性](./docs/observability-guide.md)** - TraceLogger 追踪系统
-- **[熔断器](./docs/circuit-breaker-guide.md)** - CircuitBreaker 容错机制
-- **[会话持久化](./docs/session-persistence-guide.md)** - SessionStore 会话管理
+- **[可观测性](./docs/framework/observability-guide.md)** - TraceLogger 追踪系统
+- **[熔断器](./docs/framework/circuit-breaker-guide.md)** - CircuitBreaker 容错机制
+- **[会话持久化](./docs/framework/session-persistence-guide.md)** - SessionStore 会话管理
 
 ### 增强能力
-- **[子代理机制](./docs/subagent-guide.md)** - TaskTool 与 ToolFilter
-- **[Skills 知识外化](./docs/skills-usage-guide.md)** - 技能系统使用指南
-- **[乐观锁](./docs/file_tools.md)** - 文件编辑工具的并发控制
-- **[TodoWrite 进度管理](./docs/todowrite-usage-guide.md)** - 任务进度追踪
+- **[子代理机制](./docs/framework/subagent-guide.md)** - TaskTool 与 ToolFilter
+- **[Skills 知识外化](./docs/framework/skills-usage-guide.md)** - 技能系统使用指南
+- **[乐观锁](./docs/framework/file_tools.md)** - 文件编辑工具的并发控制
+- **[TodoWrite 进度管理](./docs/framework/todowrite-usage-guide.md)** - 任务进度追踪
 
 ### 辅助功能
-- **[DevLog 决策日志](./docs/devlog-guide.md)** - 开发决策记录
-- **[异步生命周期](./docs/async-agent-guide.md)** - 异步 Agent 实现
+- **[DevLog 决策日志](./docs/framework/devlog-guide.md)** - 开发决策记录
+- **[异步生命周期](./docs/framework/async-agent-guide.md)** - 异步 Agent 实现
 
 ### 核心架构
-- **[流式输出](./docs/streaming-sse-guide.md)** - SSE 流式响应
-- **[Function Calling 架构](./docs/function-calling-architecture.md)** - LLM/Agent 基类重构
-- **[日志系统](./docs/logging-system-guide.md)** - 四种日志范式
+- **[流式输出](./docs/framework/streaming-sse-guide.md)** - SSE 流式响应
+- **[Function Calling 架构](./docs/framework/function-calling-architecture.md)** - LLM/Agent 基类重构
+- **[日志系统](./docs/framework/logging-system-guide.md)** - 四种日志范式
 
 ### 扩展能力
-- **[自定义工具扩展](./docs/custom_tools_guide.md)** - 三种工具实现方式（函数式/标准类/可展开）
+- **[自定义工具扩展](./docs/framework/custom_tools_guide.md)** - 三种工具实现方式（函数式/标准类/可展开）
 
 ---
 
@@ -197,4 +197,3 @@ hello-agents/
 
 **HelloAgents** - 让智能体开发变得简单而强大 🚀
 </div>
-

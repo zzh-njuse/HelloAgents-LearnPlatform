@@ -518,12 +518,11 @@ edit_tool.run({
 
 ## 相关文档
 
-- [工具响应协议](../refine/01-tool-response-protocol.md)
-- [乐观锁机制设计](../refine/08-optimistic-locking.md)
-- [ToolRegistry API](../api/tools/registry.md)
+- [工具响应协议](./tool-response-protocol.md)
+- 乐观锁机制见本文相关章节。
+- [自定义工具开发](./custom_tools_guide.md)
 
 ---
 
 **最后更新**：2025-01-19  
 **维护者**：HelloAgents 开发团队
-

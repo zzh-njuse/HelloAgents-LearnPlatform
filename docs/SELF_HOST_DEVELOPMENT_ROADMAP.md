@@ -1,180 +1,214 @@
-# Self-Host 学习 Agent 平台大阶段计划
+# Self-host 学习平台开发路线
 
-版本日期：2026-07-08
+版本日期：2026-07-10
 
-本文档是项目后续开发的阶段性指导文档。它从蓝图中抽取开发主线，回答“先做什么、后做什么、每个阶段解决什么核心问题”。
+状态：当前执行路线
 
-它不替代具体 feature spec。进入某一阶段的实际开发时，仍需要在该阶段目录的 `specs/` 下编写具体功能 spec。
+## 1. 路线原则
 
-## Summary
+- 使用 **Platform Stage** 表示新产品交付阶段。
+- 2026 年 5 月已完成的能力演进保留为 **Legacy Phase 1-4**，不改写历史含义。
+- 每个 Stage 先有 Spec；跨模块、数据库、删除、权限和部署决策先有 ADR。
+- 每个 Stage 结束时保留验证结果、暂缓风险和下一阶段输入。
+- 误仓库代码是参考实现，不自动成为当前 Stage 的实现。
+- 八股/LeetCode 是 fixture，不是单独产品路线。
 
-项目从现在开始不再按“demo 功能堆叠”推进，而是按 5 个大阶段演进：
+## 2. 当前状态
 
-1. 工程地基
-2. Self-host 平台骨架
-3. 资料驱动学习闭环
-4. 个性化与练习闭环
-5. 质量、成本与协作展示
+当前阶段：**Platform Stage 0R：正确仓库基线重建**。
 
-每个阶段都产出一个可讲、可演示、可继续迭代的版本，而不是等最后才形成完整项目。
+已经完成：
 
-## 阶段 0：工程地基与协作制度
+- 正确仓库现有成果 checkpoint。
+- 四份高层指导文档迁入并按当前代码重写。
+- 产品定位、三层模型和数据权威原则确认。
+- framework 指南与产品文档分区。
+- Legacy Phase 和恢复过程收敛为历史总结。
 
-目标：让项目从教学 demo 进入“可以长期开发”的状态。
+仍需完成：
 
-这一阶段不追求产品功能，而是建立后续开发的秩序：
+- 依赖与测试基线报告。
+- `academic_companion/api`、`webui`、learning/research/SSE contract inventory。
+- Stage 1 输入与误仓库参考实现采用评估。
 
-- 明确 self-host 是第一产品形态。
-- 明确 Postgres 是权威业务库，Qdrant 是可重建索引，Redis 是任务辅助，Neo4j 后置。
-- 固化 agent 协作开发流程：spec、实现、测试、review、复盘。
-- 建立 `AGENTS.md`、OCR 规则、协作 playbook、ADR/spec/eval 文档目录。
-- 清理当前 demo 代码和文档漂移，保证后续开发起点可信。
+## 3. Platform Stage 0R：基线重建
 
-阶段完成标志：
+### 目标
 
-- 仓库有清晰开发约束。
-- 数据库和部署方向已决策。
-- 后续每个功能都能从 spec 开始，而不是临时对话驱动。
+让正确仓库的文档、依赖、验证命令和 prototype contract 足以支持新的 Stage 1 设计。
 
-## 阶段 1：Self-Host 最小平台
+### 范围
 
-目标：项目从 Python 包/demo 变成能本地部署的 Web 平台。
+- 文档整理、现状评估和历史收敛。
+- 明确 `hello_agents` / `academic_companion` / product app 三层边界。
+- 区分缺依赖、环境问题和真实行为失败。
+- 固化现有 API/Web/streaming 行为清单。
+- 形成 Stage 1 spec/ADR 的输入。
 
-这一阶段解决“能不能作为一个真实项目跑起来”的问题。
+### 非目标
 
-核心能力：
+- 不迁移误仓库业务代码。
+- 不建立 Postgres schema、Compose 或最终 product app。
+- 不修改 Agent 业务行为来追求测试全绿。
 
-- 有后端 API。
-- 有前端入口。
-- 有 Docker Compose。
-- 有数据库连接。
-- 有本地文件存储。
-- 有 workspace 概念。
-- 有基础可观测性。
+### 完成 Gate
 
-这阶段不追求智能程度，重点是项目形态成型：用户 clone 仓库后可以配置 `.env`，启动服务，看到一个可操作的学习平台雏形。
+- Stage 0R README、Spec、ADR 和本路线一致。
+- 依赖/测试基线可复现。
+- prototype contract inventory 完成。
+- Stage 1 的目标、非目标、候选文件和验证命令明确。
+- 人工批准进入 Stage 1。
 
-阶段完成标志：
+## 4. Platform Stage 1：Self-host 最小产品壳
 
-- 用户可以 self-host 启动。
-- 可以创建或进入一个 workspace。
-- 后端、前端、数据库、向量库的关系清楚。
-- 项目从“库”变成“应用”。
+### 用户价值
 
-## 阶段 2：资料驱动的学习入口
+用户可以按文档启动平台、打开 Web、检查系统状态并创建 workspace。平台能够通过一个最小 adapter 调用已有领域能力，证明产品层与能力层接通。
 
-目标：让用户提供资料后，系统能把资料变成可检索、可引用、可展示的学习资产。
+### 建议范围
 
-这是平台的第一条核心业务主线。
+- `apps/api`：FastAPI product app、配置、workspace API、readiness。
+- `apps/web`：工作台、workspace 列表/创建、系统状态。
+- Postgres + Alembic：只建立 Stage 1 必需 schema。
+- Docker Compose：Postgres、Qdrant、Redis、API、Web。
+- product/domain adapter：选择一个低风险能力接点。
+- focused tests、Web build、Compose smoke 和阶段 review。
 
-核心能力：
+### 明确不做
 
-- 上传或导入资料。
-- 解析资料。
-- 分块。
-- 持久化 chunk 和文档版本。
-- 建立 Qdrant 向量索引。
-- 能展示资料处理状态。
-- 能基于资料问答，并给出引用。
+- 文件上传和 ingestion worker。
+- Course Reader、完整聊天迁移、练习与 memory 产品化。
+- 多用户鉴权、Hosted SaaS、Neo4j。
 
-这一阶段的关键不是“生成漂亮课程”，而是建立可信资料管线。只要资料管线不稳，后面的章节、练习、记忆都会不稳。
+### 关键决策
 
-阶段完成标志：
+- 误仓库 `apps/*` 是逐文件移植还是按正确仓库重建。
+- prototype `/api` 与 product `/api/v1` 的兼容策略。
+- app 依赖、配置命名空间和 Docker build 边界。
+- Stage 1 最小 adapter 的输入输出。
 
-- 一份 PDF/Markdown/文本资料可以从上传走到 ready。
-- 用户能看到资料和解析结果。
-- 用户能问资料相关问题。
-- 回答有引用。
-- 删除或重建索引有明确语义。
+### 完成 Gate
 
-## 阶段 3：章节化学习体验
+- 干净环境按文档启动 Compose。
+- Web 和 API 可访问，readiness 不泄露敏感信息。
+- workspace CRUD 最小路径通过。
+- migration 可重复执行。
+- adapter smoke 通过，不绕过产品 API。
 
-目标：从“资料问答”升级为“可以按章节学习”。
+## 5. Platform Stage 2：资料生命周期与引用检索
 
-这一阶段开始形成真正的学习产品体验。
+### 用户价值
 
-核心能力：
+用户可以在 workspace 上传资料，查看处理状态，并对资料执行带引用检索。
 
-- 从资料中抽取知识点。
-- 生成章节结构。
-- 生成章节学习页。
-- 标注知识点重要程度、难度、先修关系。
-- 在章节页中展示相关引用和例子。
-- Tutor Agent 能围绕当前章节回答问题。
+### 建议范围
 
-这一阶段要特别注意：Chat 不能吞掉整个产品。聊天只是辅导入口，核心界面应该是 Course Reader。
+- PDF、Markdown、纯文本的第一版上传和解析。
+- document/version/chunk/job/citation 数据模型。
+- local storage adapter。
+- Redis 队列与 worker。
+- embedding adapter 和 Qdrant workspace filter。
+- 失败状态、显式重试、软删除和索引重建。
+- Ingestion Center 与引用片段页面。
+- 离线 fixture tests 和一次显式真实 provider smoke。
 
-阶段完成标志：
+### 明确不做
 
-- 用户上传资料后，不只是得到一个聊天框，而是得到一套章节结构。
-- 每个章节有正文、知识点、引用、相关片段。
-- 用户能在章节上下文中提问。
-- 章节内容可以重新生成和版本化。
+- 万能 parser、OCR、Office 和网页批量导入。
+- 完整自然语言课程或练习闭环。
+- 为现有八股/LeetCode 设计专用模型。
 
-## 阶段 4：练习、记忆与学习闭环
+### 完成 Gate
 
-目标：让平台从“看资料”变成“学会”。
+- 一份小资料可从上传走到 ready。
+- Postgres、storage 和 Qdrant 职责符合 ADR。
+- 删除后默认检索不再返回资料。
+- citation 可定位到 document version 和 chunk。
+- worker 失败可见、可重试。
 
-这一阶段补齐学习效果闭环。
+## 6. Platform Stage 3：章节化学习与 Tutor
 
-核心能力：
+### 用户价值
 
-- 自动生成练习题。
-- 生成答案、讲解和评分 rubric。
-- 用户作答。
-- 系统评分和反馈。
-- 记录错题。
-- 更新知识点掌握度。
-- 形成学习记忆和复习队列。
+用户可以把资料组织成章节，在 Course Reader 中阅读，并获得当前上下文内的带引用辅导。
 
-这里开始真正体现 agent 的个性化价值：不是只回答问题，而是根据用户行为调整学习路径。
+### 建议范围
 
-阶段完成标志：
+- course/section/lesson/version/citation。
+- Course Architect 与 Lesson Writer 的受控生成。
+- Course Reader 三栏核心体验。
+- Tutor 绑定 workspace、section、citation 和最小 memory context。
+- 生成内容发布状态与重生成。
+- RAG/citation/lesson 最小 eval。
 
-- 用户完成章节后能做题。
-- 做错后能得到讲解。
-- 系统能记录薄弱点。
-- 下次进入时能推荐复习内容。
-- 记忆可见、可解释、可删除。
+### 完成 Gate
 
-## 阶段 5：质量、成本与工程展示
+- 章节内容可追溯、可版本化。
+- Tutor 资料不足时不伪造引用。
+- Course Reader 支持稳定重复学习操作。
+- 固定 eval case 可重复运行。
 
-目标：把项目从“能用”提升到“可信、可维护、可面试讲述”。
+## 7. Platform Stage 4：练习、记忆与复习闭环
 
-这一阶段不是单独补功能，而是把前面所有能力纳入质量体系。
+### 用户价值
 
-核心能力：
+用户作答后得到反馈，平台记录薄弱点并形成复习队列。
 
-- RAG eval。
-- 练习质量 eval。
-- 引用命中率和 faithfulness 检查。
-- agent run trace。
-- tool call trace。
-- token 成本统计。
-- OCR/CR review 记录。
-- 长时间 agent 协作开发复盘。
-- 面试展示案例。
+### 建议范围
 
-阶段完成标志：
+- exercise/rubric/attempt/feedback。
+- learning event、concept mastery、review item。
+- Exercise Agent 和 Review Coach。
+- memory 可查看、纠正和删除。
+- 练习质量与掌握度更新 eval。
 
-- 能展示一次资料从上传到学习闭环的完整 trace。
-- 能说明每次 agent 输出如何被评估。
-- 能看到成本和质量指标。
-- 能讲清楚哪些任务适合 agent 自主做，哪些必须人工 gate。
-- 项目不仅有功能，还有工程方法论。
+### 完成 Gate
 
-## Assumptions
+- 作答、评分、反馈和复习形成可审计链路。
+- memory 不以隐藏文件作为唯一事实来源。
+- 用户可以理解系统为什么推荐某项复习。
 
-- 第一产品形态是 self-host 开源项目，不优先做 hosted SaaS。
-- 第一版允许单用户 self-host，完整多用户鉴权后置。
-- Neo4j、复杂多 agent、自动化运营任务后置。
-- 每个阶段都遵循 Agent 协作开发流程，但“协作展示”集中在最后整理成案例。
+## 8. Platform Stage 5：质量、成本与部署加固
 
-## 如何使用本文档
+### 用户价值
 
-- 做阶段选择时，看本文档。
-- 做具体功能时，写 `docs/<NN-stage-name>/specs/`。
-- 做架构决策时，写 `docs/<NN-stage-name>/adr/`。
-- 做评测设计时，写 `docs/<NN-stage-name>/evals/`。
-- 做 OCR/CR 记录时，写 `docs/<NN-stage-name>/reviews/`。
-- 发现阶段目标变化时，先更新本文档，再展开具体开发任务。
+平台运行质量、成本和风险可见，self-host 部署具备更可信的维护方式。
+
+### 建议范围
+
+- agent run、tool call、eval、latency 和 cost dashboard。
+- provider budget、timeout、retry、cache 和 circuit breaker 策略。
+- Postgres backup/restore、Qdrant rebuild 和 storage reconciliation。
+- Redis/Qdrant auth、容器非 root、端口和反向代理 hardening。
+- CI、集成测试和发布文档。
+
+### 完成 Gate
+
+- 质量与成本指标来自真实 trace/eval。
+- 权威数据可备份，派生索引可重建。
+- 部署风险与默认暴露范围有明确说明。
+
+## 9. 阶段依赖
+
+```text
+Stage 0R 基线
+  -> Stage 1 产品壳
+  -> Stage 2 资料生命周期
+  -> Stage 3 章节与 Tutor
+  -> Stage 4 练习与记忆
+  -> Stage 5 质量与加固
+```
+
+后续 Stage 可以做设计预研，但不能绕过前一阶段的数据合同和验证 Gate 开始大规模实现。
+
+## 10. 文档交付标准
+
+每个 Stage 至少包含：
+
+- `README.md`：目标、当前状态、文档入口。
+- `specs/`：用户故事、范围、接口、失败模式和验收。
+- `adr/`：不可逆或跨模块决策。
+- `reviews/`：较大代码或阶段末审查记录。
+- 阶段总结：实际完成、验证结果、暂缓风险和下一阶段输入。
+
+实现细节过期后收敛进阶段总结，不在 `docs/` 根目录长期堆放多份当前计划。

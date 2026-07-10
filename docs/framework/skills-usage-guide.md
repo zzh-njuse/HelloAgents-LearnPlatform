@@ -456,7 +456,7 @@ git pull
 **检查**：
 ```python
 # 运行检查脚本
-python examples/check_skills_activation.py
+python examples/skills_demo.py
 ```
 
 **可能原因**：
@@ -526,7 +526,6 @@ else:
 ---
 
 **相关文档**：
-- [Skills 系统设计](../refine/07-skills-knowledge-externalization.md)
-- [检查脚本](../../examples/check_skills_activation.py)
+- [Skills 快速开始](./skills-quickstart.md)
+- [示例脚本](../../examples/skills_demo.py)
 - [测试用例](../../tests/test_skills.py)
-

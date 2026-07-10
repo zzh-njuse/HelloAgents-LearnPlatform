@@ -523,14 +523,13 @@ if agent._session_metadata["total_steps"] > 10:
 
 ## 🔗 相关文档
 
-- [上下文工程优化](../refine/02-context-engineering.md)
-- [乐观锁机制](../refine/08-optimistic-locking.md)
-- [可观测性优化](../refine/03-observability.md)
+- [上下文工程](./context-engineering-guide.md)
+- [文件工具与乐观锁](./file_tools.md)
+- [可观测性](./observability-guide.md)
 
 ---
 
 **最后更新**：2025-01-19
 **维护者**：HelloAgents 开发团队
-
 
 

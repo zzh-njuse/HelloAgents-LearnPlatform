@@ -1,0 +1,50 @@
+# 文档索引
+
+## 当前指导文档
+
+以下四份文档共同定义当前产品方向和开发方式：
+
+- [学习平台蓝图](./LEARNING_AGENT_BLUEPRINT.md)
+- [Self-host 开发路线](./SELF_HOST_DEVELOPMENT_ROADMAP.md)
+- [数据库与部署计划](./DATABASE_AND_DEPLOYMENT_PLAN.md)
+- [Agent 协作开发流程](./AGENT_COLLABORATION_PLAYBOOK.md)
+
+## 当前阶段
+
+- [Platform Stage 0R：正确仓库基线重建](./00R-platform-baseline-reconstruction/README.md)
+- [Stage 0R Spec](./00R-platform-baseline-reconstruction/specs/001-correct-repository-baseline-reconstruction.md)
+- [产品分层 ADR](./00R-platform-baseline-reconstruction/adr/001-product-layer-and-dependency-boundaries.md)
+- [现状评估与重新计划](./00R-platform-baseline-reconstruction/CURRENT_STATE_AND_REPLAN.md)
+
+## Framework 指南
+
+`framework/` 保存仍与 `hello_agents` 当前实现相关的技术指南。它们解释框架能力，不定义学习平台产品路线。
+
+- [工具响应协议](./framework/tool-response-protocol.md)
+- [上下文工程](./framework/context-engineering-guide.md)
+- [Function Calling](./framework/function-calling-architecture.md)
+- [异步 Agent](./framework/async-agent-guide.md)
+- [流式输出与 SSE](./framework/streaming-sse-guide.md)
+- [会话持久化](./framework/session-persistence-guide.md)
+- [可观测性](./framework/observability-guide.md)
+- [日志系统](./framework/logging-system-guide.md)
+- [熔断器](./framework/circuit-breaker-guide.md)
+- [子代理](./framework/subagent-guide.md)
+- [Skills](./framework/skills-usage-guide.md)
+- [自定义工具](./framework/custom_tools_guide.md)
+- [文件工具](./framework/file_tools.md)
+- [TodoWrite](./framework/todowrite-usage-guide.md)
+- [DevLog](./framework/devlog-guide.md)
+
+## 历史
+
+- [Legacy 实现与仓库恢复总结](./history/LEGACY_AND_RECOVERY_SUMMARY.md)
+
+旧阶段的详细计划、开发日志和恢复过程文档已由该总结替代。需要逐行追溯时使用 Git 历史，不再让过期文档占据当前文档入口。
+
+## 维护规则
+
+- 产品现状只写可由当前代码、测试或 Git 记录验证的事实。
+- 路线图写阶段目标；Spec 写阶段内合同；ADR 写不可逆或跨模块决策。
+- 已完成的短期计划在阶段总结中收敛，避免长期保留多份相互冲突的“当前计划”。
+- Framework 指南与产品文档分开维护。

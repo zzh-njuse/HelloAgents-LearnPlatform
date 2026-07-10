@@ -1,193 +1,222 @@
 # Agent 协作开发 Playbook
 
-版本日期：2026-07-08
+版本日期：2026-07-10
 
-目标：把“会用 Codex”变成项目级工程能力。从现在开始，Agent 协作开发不是 Phase 4 展示项，而是每个阶段默认遵守的工作方式。
+状态：当前开发流程
 
-## 1. 调研结论
+## 1. 目标
 
-OpenAI 官方 Codex 最佳实践把 Codex 定位成需要长期配置和改进的队友，而不是一次性问答助手。官方建议的基本结构是：给出明确任务上下文，用 `AGENTS.md` 保存持久规则，用配置匹配工作流，用 MCP 连接外部系统，把重复工作沉淀为 skills，再把稳定流程自动化。
+把 Agent 用于可审查、可验证、可回退的软件开发，而不是让聊天记录代替需求、测试和架构决策。
 
-对我们这个项目，最重要的结论有六条：
-
-1. 每个任务都要给 `Goal / Context / Constraints / Done when`，避免 agent 自己猜范围。
-2. 复杂或模糊任务先 plan，不直接写代码。
-3. `AGENTS.md` 必须从现在开始维护，因为它能把重复反馈变成仓库规则。
-4. 测试、lint、diff review、OCR review 要进入默认闭环，而不是最后补。
-5. MCP 只接真正能减少复制粘贴的外部上下文，不把所有东西都 MCP 化。
-6. 重复三次的提示词和审查清单，应该沉淀为 skill；需要团队分发时再打包成 plugin。
-
-另外，一篇 2026 年关于 `AGENTS.md` 的实证研究发现，在 10 个仓库、124 个 PR 任务中，加入 `AGENTS.md` 与更低的中位运行时间和更低的输出 token 消耗相关。这个结论不是说 `AGENTS.md` 会自动提高正确率，但足以支持我们把它当成成本和效率控制工具。
-
-## 2. 本项目当前 Codex 能力盘点
-
-当前本机已经具备这些能力：
-
-| 类别 | 当前可用项 | 用法定位 |
-|---|---|---|
-| Repo guidance | 新增 `AGENTS.md` | 每次任务自动加载仓库规则 |
-| Local skill | `ocr-codex-app` | 调用本地 OpenCodeReview 做代码 diff 审查 |
-| Plugins | browser、github、documents、pdf、spreadsheets、presentations、template-creator | 浏览器验证、GitHub 工作流、文档/表格/演示稿处理 |
-| MCP servers | `node_repl`、`llm_research_sources` | 浏览器/JS 执行、研究资料接口 |
-| OCR marketplace | `open-code-review` 本地 marketplace | 后续可把 OCR 从个人 skill 升级为团队 plugin |
-
-不建议马上做的事：
-
-- 不要现在就写大量 project MCP server。等 API、DB、job 基本稳定后再 MCP 化。
-- 不要把所有开发流程都做成 automations。先手动跑 3-5 次，流程稳定后再自动化。
-- 不要把 skill 写得很泛。每个 skill 只覆盖一个可复用任务。
-
-## 3. 从现在开始的标准开发闭环
-
-每个非平凡功能都走这条链：
+本项目默认采用：
 
 ```text
-idea
-  -> spec
-  -> Codex plan
-  -> implementation
-  -> focused tests
+事实盘点
+  -> spec/ADR
+  -> 实现计划
+  -> 小范围实现
+  -> focused verification
   -> self-review
-  -> OCR preview/review when code changes are meaningful
-  -> fixes
-  -> final verification
-  -> human decision
-  -> retrospective update to AGENTS.md/skills/docs
+  -> 必要时独立 review
+  -> 人工 gate
+  -> 阶段总结
 ```
 
-各步骤要求：
+## 2. 开始任务时必须提供
 
-| 步骤 | 产物 | 通过条件 |
+非平凡任务至少明确：
+
+| 项目 | 内容 |
+|---|---|
+| Goal | 用户或系统最终获得什么行为 |
+| Context | 当前代码、相关历史和已确认决策 |
+| Constraints | 不允许修改的范围、依赖、安全与兼容要求 |
+| Done when | 可运行的验证命令和人工验收条件 |
+
+模糊需求先分析或写 spec，不通过实现反向定义需求。
+
+## 3. 事实优先级
+
+```text
+当前正确仓库代码和可重复验证
+  > 已接受 ADR/spec
+  > 当前四份高层指导文档
+  > 历史总结和误仓库参考实现
+  > 聊天记录中的临时假设
+```
+
+旧报告中的“已通过”不能替代当前环境重跑。缺依赖、环境失败和代码行为失败必须分开记录。
+
+## 4. 文档工作流
+
+### 路线图
+
+定义 Stage 顺序、用户价值、非目标和完成 Gate，不写逐文件实现细节。
+
+### Spec
+
+用于一个 Stage 或功能切片，至少包含：
+
+- Goal 和 Context。
+- 用户故事与关键流程。
+- 范围、非目标和文件边界。
+- API/数据模型草案。
+- 失败模式。
+- 验收条件与验证命令。
+
+### ADR
+
+用于不可逆或跨模块决策，例如：
+
+- framework/product 边界。
+- 数据事实来源。
+- schema、migration、删除和重建语义。
+- 任务队列、provider、权限和部署形态。
+
+### 阶段总结
+
+记录实际完成、验证结果、暂缓风险和下一阶段输入。旧计划完成后收敛进总结，避免文档根目录持续堆叠相互冲突的“当前计划”。
+
+## 5. 风险等级
+
+| 等级 | 示例 | 默认处理 |
 |---|---|---|
-| spec | `docs/<NN-stage-name>/specs/<id>-<topic>.md` | 目标、范围、接口、数据、失败模式、验收标准清楚 |
-| plan | Codex plan 或任务清单 | 文件范围和验证命令明确 |
-| implementation | 小 diff | 不混入无关重构 |
-| focused tests | pytest/lint/type/eval | 至少覆盖本次变更主路径 |
-| self-review | 简短风险检查 | 明确测试缺口和残余风险 |
-| OCR review | review 摘要 | High 必修，Medium 逐项判断，Low 不盲改 |
-| final verification | 命令和结果 | 用户能看到实际验证过什么 |
-| retrospective | AGENTS/skill/doc 更新 | 重复问题不再只靠记忆 |
+| L0 | 解释、盘点、只读分析 | 可直接进行，说明来源和假设 |
+| L1 | 文档、测试、小修 | 可实现，运行最窄检查 |
+| L2 | 小 API、UI 组件、adapter | 先有 spec，补 focused tests |
+| L3 | schema、删除、权限、队列、部署 | 先有 spec/ADR，独立 review 和人工 gate |
+| L4 | 大迁移、生产部署、批量数据操作 | 分阶段执行，每个阶段人工批准 |
 
-## 4. 风险分级授权
+误仓库到正确仓库的代码采用属于 L3/L4，不做整提交 cherry-pick 或无审查目录覆盖。
 
-| 等级 | 任务类型 | Agent 自主度 | 必须验证 |
-|---|---|---|---|
-| L0 | 解释、调研、计划 | 可自由分析，不改代码 | 来源和假设说清楚 |
-| L1 | 文档、测试、小修 | 可直接改 | `git diff --check` 或相关测试 |
-| L2 | 小功能、API、存储适配 | 可实现，但要 spec | 单测 + self-review |
-| L3 | 数据库 schema、删除逻辑、权限、部署 | 必须先 spec/ADR | 测试 + OCR review + 人工确认 |
-| L4 | 大范围重构、自动迁移、真实部署操作 | 不允许无审核 | 分阶段 PR 和人工 gate |
+## 6. 实现规则
 
-无审核长时间开发只允许从 L1/L2 开始，且必须在独立分支或 worktree 中进行。
+- 先读当前代码和相邻测试，遵循已有模式。
+- 小步修改，不混合功能、重构、格式化和文档大改。
+- 保留用户或其他 Agent 的未知改动，不主动回滚。
+- 产品依赖不污染 `hello_agents` framework 包。
+- `apps`、`academic_companion`、`hello_agents` 遵守已接受的单向依赖。
+- 数据库和删除行为先定义事实来源、失败恢复和幂等。
+- 配置、API key、用户资料正文和敏感 prompt 不进入日志或提交。
 
-## 5. 需要马上补齐的仓库资产
+## 7. 验证基线
 
-已完成：
-
-- 根目录 `AGENTS.md`：仓库级 Codex 规则。
-- `.opencodereview/rule.json`：项目级 OCR 审查规则。
-- 本文档：Agent 协作开发 playbook。
-
-下一步建议：
-
-1. 进入阶段 1 时，建立 `docs/02-stage-1-self-host-platform/`，并保留 `specs/`、`adr/`、`evals/`、`reviews/` 子目录。
-2. 为阶段 1 平台骨架编写第一份 spec，例如 `docs/02-stage-1-self-host-platform/specs/001-self-host-platform-skeleton.md`。
-3. 后端技术栈、migration 方案等若无法在 spec 中轻量确认，则写阶段 1 ADR。
-4. 有实质代码变更并运行 OCR review 时，把摘要保存到当前阶段的 `reviews/` 目录。
-5. 等连续 3 个功能都用同一套流程完成后，再考虑沉淀 repo-local skill 或打包 plugin。
-
-## 6. Codex 辅助能力如何用
-
-### AGENTS.md
-
-用途：仓库级持久约定。应该保持短小、准确、可执行。
-
-放入：
-
-- 项目结构。
-- 测试和验证命令。
-- 不要做什么。
-- self-host 方向的关键架构约束。
-- OCR review 的触发条件。
-
-不要放入：
-
-- 长篇蓝图。
-- 临时任务细节。
-- 私密 API key。
-- 大量容易过期的外部资料。
-
-### Skills
-
-用途：重复工作流。适合本项目的 skill 候选：
-
-| Skill | 触发语 | 价值 |
-|---|---|---|
-| `self-host-feature` | “实现一个 self-host 功能” | 固化 spec、实现、测试、review 流程 |
-| `db-schema-change` | “改数据库/迁移/schema” | 强制 ADR、迁移检查、回滚思考 |
-| `rag-eval` | “补 RAG eval/评测” | 固化 eval case、指标、报告格式 |
-| `frontend-qa` | “检查前端页面/截图验收” | 固化响应式截图和 UI 检查 |
-| `ocr-review-gate` | “用 OCR 审一下” | 固化 preview、review、分类、修复、复验 |
-
-Windows 下手动检查 OCR 规则时，路径尽量写成正斜杠，例如：
+### 通用
 
 ```powershell
-C:\Users\Admin\bin\ocr.exe rules check hello_agents/tools/builtin/rag_tool.py
+git diff --check
+git status --short --branch
 ```
 
-### Plugins
+### Framework/domain Python
 
-用途：可安装分发的工作流包。现在先用现有插件：
+目标命令：
 
-- GitHub plugin：后续 PR、issue、CI 检查。
-- Browser plugin：前端本地页面验证、截图。
-- PDF/documents/spreadsheets/presentations：处理用户学习资料和面试展示材料。
-- OCR 本地 marketplace：等 OCR skill 稳定后升级成项目 plugin。
+```powershell
+python -m pytest -q
+```
 
-不要一开始就自建 plugin。先把 skill 跑顺。
+当前本机曾因缺少 `tiktoken` 在 collection 阶段失败。Stage 0R 必须先建立可复现依赖环境，再把该命令作为行为基线。不能为绕过依赖失败随意删除 import 或测试。
 
-### MCP
+### Academic Companion Web prototype
 
-用途：连接仓库外部的活上下文和工具。
+```powershell
+cd academic_companion/webui
+npm.cmd run lint
+npm.cmd run build
+```
 
-本项目早期适合接：
+### Product app
 
-- GitHub/GitLab：issue、PR、CI。
-- OCR/OpenCodeReview：代码审查工具。
-- 本地文档资料库：后续可暴露课程资料或 eval 结果。
-- 浏览器或设计工具：前端验证阶段再接。
+Stage 1 建立后，应分别记录：
 
-暂时不 MCP 化：
+- API focused tests。
+- migration test。
+- Web lint/build。
+- `docker compose config`、build、up、readiness 和业务 smoke。
 
-- Postgres CRUD。
-- RAG 主检索路径。
-- 内部 Python 函数。
+真实 provider、OCR 或大规模 eval 必须显式触发，不作为每次小改的默认成本。
 
-### Hooks 和 Automations
+## 8. Review 策略
 
-Hooks 适合机械约束，比如禁止直接提交 `.env`、阻止无 spec 的 migration、运行格式检查。现在先不加 hook，等目录结构稳定后再做。
+### Self-review
 
-Automations 适合稳定重复任务，比如每日检查依赖、每晚跑 eval、每周扫描 AGENTS.md 是否需要更新。现在先不做自动化，等 Phase 1 跑通后再开。
+每次实现后检查：
 
-## 7. 每阶段如何贯穿 Agent 协作
+- 行为回归和错误路径。
+- 数据丢失、权限和敏感信息风险。
+- 缺失测试。
+- 是否扩大了约定范围。
+- 文档与公开行为是否同步。
 
-| 阶段 | 协作要求 | 证明材料 |
-|---|---|---|
-| Phase 0 地基 | 每次修复都更新 AGENTS/docs/tests | commit、测试结果、doc diff |
-| Phase 1 self-host MVP | 每个功能先 spec，代码走 OCR gate | spec、review 摘要、pytest |
-| Phase 2 学习闭环 | 生成能力必须有 eval case | eval 结果、失败样例 |
-| Phase 3 成本质量 | agent run 和 token 进入看板 | trace、cost_events |
-| Phase 4 展示整理 | 不再新建流程，只整理案例 | 复盘、指标、面试叙事 |
+### 独立 review
 
-也就是说，Phase 4 不再是“才开始做 Agent 协作”，而是“把之前一直在做的协作方式产品化、案例化、可讲述化”。
+以下情况使用 OCR 或其他独立代码审查：
 
-## 8. 调研来源
+- Stage 末或较大 diff。
+- schema、删除、权限和部署变更。
+- 容器、安全暴露或输入边界。
 
-- OpenAI Codex Best practices：上下文、Plan mode、AGENTS.md、配置、测试/review、MCP、skills、automations。https://developers.openai.com/codex/learn/best-practices
-- OpenAI Codex Customization：AGENTS.md、memories、skills、MCP、subagents 的分层关系和建议建设顺序。https://developers.openai.com/codex/concepts/customization
-- OpenAI Codex AGENTS.md：Codex 如何发现和合并 `AGENTS.md`。https://developers.openai.com/codex/guides/agents-md
-- OpenAI Codex Skills：skills 的结构、渐进加载和触发方式。https://developers.openai.com/codex/skills
-- OpenAI Codex Plugins：plugin 如何打包 skills、apps 和 MCP servers。https://developers.openai.com/codex/plugins
-- OpenAI Codex Automations：后台定期任务和 worktree 隔离。https://developers.openai.com/codex/app/automations
-- OpenAI Codex Review：本地 review pane、inline comments 和 `/review`。https://developers.openai.com/codex/app/review
-- Lulla et al., On the Impact of AGENTS.md Files on the Efficiency of AI Coding Agents, 2026。https://arxiv.org/abs/2601.20404
+review finding 是建议，不是自动命令。按采纳、暂缓、拒绝分类；暂缓项进入阶段总结。避免无限 review loop。
+
+## 9. 人工 Gate
+
+以下节点必须停下确认：
+
+- Spec/ADR 从草稿转为接受。
+- 开始 Stage 1 代码迁移或重建。
+- 修改 schema、删除语义或权限边界。
+- 引入新的默认服务或 provider。
+- 执行真实部署、批量迁移或不可逆数据操作。
+- 合并阶段性大提交。
+
+Agent 可以完成分析、实现、测试和 review，但不能把“技术上能做”当作“产品决策已确认”。
+
+## 10. 使用误仓库参考实现
+
+允许：
+
+- 阅读其高层设计、Stage 1 API/Web/Compose、测试和 review。
+- 提取候选合同、失败经验和验证命令。
+- 在正确仓库 spec/ADR 下逐文件采用。
+
+不允许：
+
+- 把误仓库测试结果冒充正确仓库当前验证。
+- 整提交 cherry-pick 后再补需求。
+- 用误仓库缺失 `academic_companion` 的假设设计产品边界。
+- 同时迁入 Stage 1 骨架和 Stage 2 业务实现。
+
+## 11. Agent 适合与不适合的任务
+
+适合自主推进：
+
+- 资产盘点、接口清单和文档同步。
+- 按既有模式补 focused tests。
+- 机械性目录整理和低风险 adapter。
+- 运行验证并整理失败证据。
+
+需要更强人工参与：
+
+- 产品边界不清的功能。
+- schema、权限、删除和数据迁移。
+- 复杂前端信息架构。
+- provider 成本、安全和生产部署。
+
+## 12. 当前阶段用法
+
+Platform Stage 0R 只进行：
+
+- 文档规整与高层指导文档修缮。
+- 依赖与测试基线。
+- prototype contract inventory。
+- Stage 1 输入准备。
+
+在 Stage 1 spec/ADR 人工确认前，不迁移误仓库业务代码。
+
+相关文档：
+
+- [文档索引](./README.md)
+- [学习平台蓝图](./LEARNING_AGENT_BLUEPRINT.md)
+- [开发路线](./SELF_HOST_DEVELOPMENT_ROADMAP.md)
+- [Stage 0R Spec](./00R-platform-baseline-reconstruction/specs/001-correct-repository-baseline-reconstruction.md)
