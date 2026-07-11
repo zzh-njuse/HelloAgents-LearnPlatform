@@ -20,6 +20,7 @@
 - [0R-A 依赖与验证基线](./00R-platform-baseline-reconstruction/DEPENDENCY_AND_VERIFICATION_BASELINE.md)
 - [0R-B 原型合约盘点](./00R-platform-baseline-reconstruction/PROTOTYPE_CONTRACT_INVENTORY.md)
 - [Platform Stage 1：Self-Host 平台壳](./01-platform-stage-1-self-host-shell/README.md)
+- [Platform Stage 2：资料生命周期与引用检索](./02-platform-stage-2-material-lifecycle-and-citation-retrieval/README.md)
 
 ## Framework 指南
 

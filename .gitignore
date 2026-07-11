@@ -165,6 +165,13 @@ cython_debug/
 # 运行时生成数据（traces, sessions, todos）
 /memory/
 /memory_data/
+/storage/*
+!/storage/.gitkeep
+
+# Product app build artifacts
+/apps/web/node_modules/
+/apps/web/dist/
+/apps/web/*.tsbuildinfo
 
 # Local audit, editor, and scratch artifacts
 /.backups/

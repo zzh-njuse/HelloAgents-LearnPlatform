@@ -1,0 +1,11 @@
+.git
+.venv
+**/__pycache__
+**/.pytest_cache
+academic_companion/webui/node_modules
+academic_companion/webui/dist
+apps/web/node_modules
+apps/web/dist
+data
+memory
+memory_data
