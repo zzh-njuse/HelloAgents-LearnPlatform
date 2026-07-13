@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -8,6 +8,15 @@ WORKDIR /app
 
 COPY apps/api/requirements.txt /app/apps/api/requirements.txt
 RUN pip install --no-cache-dir -r /app/apps/api/requirements.txt
+
+FROM base AS test
+
+COPY apps/api/requirements-dev.txt /app/apps/api/requirements-dev.txt
+RUN pip install --no-cache-dir -r /app/apps/api/requirements-dev.txt
+COPY apps/api /app/apps/api
+WORKDIR /app/apps/api
+
+FROM base AS runtime
 
 COPY apps/api /app/apps/api
 WORKDIR /app/apps/api

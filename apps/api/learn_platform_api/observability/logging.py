@@ -23,6 +23,10 @@ class JsonFormatter(logging.Formatter):
             "path",
             "status_code",
             "duration_ms",
+            "job_id",
+            "phase",
+            "error_code",
+            "exception_type",
         ):
             if hasattr(record, field):
                 payload[field] = getattr(record, field)

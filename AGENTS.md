@@ -17,7 +17,7 @@
   - `docs/DATABASE_AND_DEPLOYMENT_PLAN.md`
   - `docs/AGENT_COLLABORATION_PLAYBOOK.md`
 - 再读取当前 Stage 的 README、Spec、ADR、review 和阶段总结。
-- 当前阶段是 `docs/00R-platform-baseline-reconstruction/`。
+- Stage 2 已完成；当前文档准备阶段是 `docs/03-platform-stage-3-chapter-learning-and-tutor/`。
 - 先检查 `git status --short --branch`，保留用户和其他 Agent 的未知改动。
 
 ## Stage 与文档门禁
@@ -29,20 +29,17 @@
 - Stage 收尾必须记录：实际完成、验证结果、暂缓风险、下一阶段输入和 review 结论。
 - 过期计划收敛进阶段总结或 `docs/history/`，不要在 `docs/` 根目录长期保留多份当前计划。
 
-## 当前 Stage 0R 范围
+## 当前 Stage 3 文档门禁
 
-允许：
+当前允许：
 
-- 依赖与测试基线。
-- Learning/Research/API/SSE prototype contract inventory。
-- Stage 1 Spec、ADR 和误仓库参考实现采用矩阵。
-- 文档和必要的测试/依赖配置修正。
+- Stage 2 总结、Stage 3 事实盘点、Spec/ADR 起草、参考资产分析和 eval 设计。
+- 人工评审修订、评审归档与 Stage 3 实现计划。
 
-禁止：
+仍然禁止：
 
-- 未经 Stage 1 gate 迁移误仓库 `apps/` 或 Compose 业务代码。
-- 重构现有 Agent 行为来掩盖依赖环境问题。
-- 整提交 cherry-pick 误仓库阶段实现。
+- 在 Stage 3 Spec/ADR 未经人工接受前实现 course、lesson、Tutor、Agent runtime、session、memory 或对应 schema。
+- 直接复用 `hello_agents.rag.pipeline` 或 `academic_companion` 原型来绕过产品合同，或让误仓库代码反向定义新的产品合同。
 
 ## 工程边界
 
@@ -64,6 +61,7 @@
   - `npm.cmd run build`
 - 文档-only：`git diff --check`，并检查 Markdown 相对链接。
 - Stage 1 self-host 代码建立后，最低验证包括 API focused tests、migration test、Web build、`docker compose config/build/up/ps`、`/ready`、Web HTTP 200 和一个业务 smoke。
+- 改动上传、解析、重试或异步 Web 状态时，除自动化检查外还要以有代表性的真实资料完成一次人工浏览器 smoke；人工发现的问题应转化为回归测试，或明确记录无法自动化的原因与后续输入。
 - 无法运行的检查必须说明具体缺失依赖或环境条件，不能写成“视为通过”。
 
 ## OCR / OpenCodeReview 门禁
@@ -89,17 +87,23 @@ ocr review --preview
 ocr llm test
 ```
 
-真实 diff review 使用 Agent 友好输出：
+普通 diff review 使用 Agent 友好输出：
 
 ```powershell
 ocr review --audience agent --background "brief business context"
 ```
 
-大 diff 可以在确认 provider 成本后使用：
+`--audience agent` 只在结束时输出摘要，不显示过程进度。较大的 Stage diff 优先按风险边界使用 full-file scan，而不是提高全量 review 并发：
 
 ```powershell
-ocr review --audience agent --concurrency 4 --timeout 15 --background "brief business context"
+ocr scan --preview --path apps/api/learn_platform_api
+ocr scan --audience human --path apps/api/learn_platform_api --concurrency 1 --timeout 5 --background "brief business context"
 ```
+
+- `ocr review` 审 Git diff，但当前 CLI 不支持 pathspec；不要为分块 review 临时 stash、移动或提交未知改动。
+- `ocr scan --path` 可按文件或目录分块，代价是扫描完整文件而非仅扫描 diff。建议依次审 API/数据链路、部署配置和 Web，并由 Codex 做一次跨块合同核对。
+- 需要观察运行进度时使用 `--audience human`；只有能接受无中间输出时才使用 `--audience agent`。
+- `--timeout` 单位为分钟。先缩小路径、设 `--concurrency 1`，再按 provider 实测调整超时；不要仅因无摘要输出就无限拉长等待。
 
 若 `ocr` 不在 PATH，查找 `%USERPROFILE%\bin\ocr.exe`，不要硬编码或暴露 provider key。
 

@@ -1,6 +1,6 @@
 # 数据库与部署计划
 
-版本日期：2026-07-10
+版本日期：2026-07-12
 
 状态：当前架构指导文档
 
@@ -115,10 +115,13 @@ document_versions
 document_parse_reports
 document_chunks
 ingestion_jobs
+ingestion_batches
+ingestion_batch_items
 rag_query_traces
+rag_answer_traces
 ```
 
-document 属于 workspace，version 不覆盖历史版本，chunk 属于明确 version，job 有稳定业务 ID、状态、尝试次数和错误码。
+document 属于 workspace，version 不覆盖历史版本，chunk 属于明确 version，job 有稳定业务 ID、状态、尝试次数和错误码。batch/item 只汇总一次批量操作，不取代逐文件 document/version/job；answer trace 保存生成配置、引用、用量和状态，默认不保存完整问题、prompt 或回答历史正文。
 
 ### Stage 3：章节学习
 

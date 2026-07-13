@@ -17,7 +17,7 @@ from learn_platform_api.main import create_app
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> Generator[TestClient, None, None]:
+def db_session(tmp_path: Path) -> Generator[Session, None, None]:
     test_engine = create_engine(
         f"sqlite+pysqlite:///{tmp_path / 'test.db'}",
         connect_args={"check_same_thread": False},
@@ -27,12 +27,19 @@ def client(tmp_path: Path) -> Generator[TestClient, None, None]:
     )
     Base.metadata.create_all(bind=test_engine)
 
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+        Base.metadata.drop_all(bind=test_engine)
+        test_engine.dispose()
+
+
+@pytest.fixture
+def client(db_session: Session) -> Generator[TestClient, None, None]:
     def override_get_db() -> Generator[Session, None, None]:
-        db = TestingSessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
+        yield db_session
 
     app = create_app()
     app.dependency_overrides[get_db] = override_get_db
@@ -40,5 +47,3 @@ def client(tmp_path: Path) -> Generator[TestClient, None, None]:
         yield test_client
 
     app.dependency_overrides.clear()
-    Base.metadata.drop_all(bind=test_engine)
-    test_engine.dispose()

@@ -1,6 +1,6 @@
 # Self-host 学习平台开发路线
 
-版本日期：2026-07-10
+版本日期：2026-07-13
 
 状态：当前执行路线
 
@@ -15,21 +15,18 @@
 
 ## 2. 当前状态
 
-当前阶段：**Platform Stage 0R：正确仓库基线重建**。
+当前状态：**Platform Stage 2：资料生命周期与引用检索已完成；Platform Stage 3：章节化学习与 Tutor 处于文档准备阶段**。
 
 已经完成：
 
-- 正确仓库现有成果 checkpoint。
-- 四份高层指导文档迁入并按当前代码重写。
-- 产品定位、三层模型和数据权威原则确认。
-- framework 指南与产品文档分区。
-- Legacy Phase 和恢复过程收敛为历史总结。
+- 0R 基线重建、Stage 1 self-host 平台壳、Stage 2 单文件/批量资料生命周期、引用检索与受证据约束的单轮回答。
+- Postgres 事实源、Qdrant 可重建索引、Redis 非权威队列的产品合同已落实。
+- Stage 2 OCR 审查、focused tests、Web build、Compose 和人工验收反馈已归档。
 
-仍需完成：
+下一步：
 
-- 依赖与测试基线报告。
-- `academic_companion/api`、`webui`、learning/research/SSE contract inventory。
-- Stage 1 输入与误仓库参考实现采用评估。
+- 先为 Stage 3 完成事实盘点、Spec 和 ADR，人工确认后再开始章节、课程或 Tutor 业务实现。
+- Stage 2 收尾结论和继承边界见 [Stage 2 总结与 Stage 3 输入](./02-platform-stage-2-material-lifecycle-and-citation-retrieval/STAGE_2_SUMMARY_AND_STAGE_3_INPUTS.md)。
 
 ## 3. Platform Stage 0R：基线重建
 
@@ -123,6 +120,8 @@
 - 增加批量上传；每个文件创建独立 document/version/job，可独立失败和重试。
 - 在切片 1 稳定检索链路上增加带引用的 LLM 自然语言答案。
 - 完成 Stage 2 Web 资料问答体验和引用定位。
+- 在批量放大资料处理前建立 parser 隔离，以及页数、文本、chunk、token、时间和并发预算；超限不得静默截断后标记 ready。
+- 本切片的回答是单轮受证据约束的生成服务，不引入 Tutor Agent、工具循环、memory 或聊天 session；这些合同留在 Stage 3。
 
 ### Stage 2 整体非目标
 
