@@ -2,10 +2,10 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from learn_platform_api.db.models import DocumentVersion, IngestionJob, SourceDocument, Workspace
+from learn_platform_api.db.models import Course, CourseVersion, CourseVersionSource, DocumentVersion, IngestionJob, SourceDocument, Workspace
 from learn_platform_api.services.queue import enqueue_ingestion_job
 from learn_platform_api.services.storage import remove_file, safe_extension, write_original
 from learn_platform_api.settings import Settings
@@ -80,6 +80,10 @@ def get_document(db: Session, workspace_id: str, document_id: str) -> SourceDocu
             SourceDocument.lifecycle_status == "active",
         )
     )
+
+
+def document_course_impact(db: Session, workspace_id: str, document_id: str) -> int:
+    return db.scalar(select(func.count(func.distinct(Course.id))).select_from(Course).join(CourseVersion, CourseVersion.course_id == Course.id).join(CourseVersionSource, CourseVersionSource.course_version_id == CourseVersion.id).where(Course.workspace_id == workspace_id, Course.lifecycle_status == "active", CourseVersionSource.document_id == document_id)) or 0
 
 
 def create_document(

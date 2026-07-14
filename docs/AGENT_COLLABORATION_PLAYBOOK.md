@@ -218,7 +218,7 @@ ocr review --audience agent --background "brief business context"
 
 ```powershell
 ocr scan --preview --path apps/api/learn_platform_api
-ocr scan --audience human --path apps/api/learn_platform_api --concurrency 1 --timeout 5 --background "brief business context"
+ocr scan --audience human --path apps/api/learn_platform_api --concurrency 1 --timeout 10 --background "brief business context"
 ```
 
 按 API/数据链路、schema/部署配置、Web 等边界依次扫描；`ocr scan --path` 审的是完整文件而不是仅 Git diff，最后由 Codex 做一次跨块合同核对。`--timeout` 的单位是分钟，应先缩小范围并使用 `--concurrency 1`，再按 provider 实测调整，不因暂无摘要而无限延长等待。

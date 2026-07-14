@@ -20,3 +20,13 @@ def enqueue_ingestion_job(settings: Settings, job_id: str, delay_seconds: int = 
             queue.enqueue("learn_platform_api.workers.run_ingestion_job", job_id)
     finally:
         connection.close()
+
+
+def enqueue_course_generation_job(settings: Settings, job_id: str) -> None:
+    connection = Redis.from_url(settings.redis_url)
+    try:
+        Queue(settings.course_generation_queue_name, connection=connection).enqueue(
+            "learn_platform_api.course_workers.run_course_generation_job", job_id
+        )
+    finally:
+        connection.close()

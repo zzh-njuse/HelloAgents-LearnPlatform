@@ -1,7 +1,6 @@
 import os
 import shutil
 from pathlib import Path
-from uuid import uuid4
 
 
 def safe_extension(filename: str) -> str:
@@ -17,10 +16,18 @@ def resolve_storage_path(root: Path, relative_uri: str) -> Path:
     return target
 
 
+def native_path(path: Path) -> Path:
+    if os.name == "nt" and path.is_absolute() and not str(path).startswith("\\\\?\\"):
+        return Path(f"\\\\?\\{path}")
+    return path
+
+
 def atomic_write(root: Path, relative_uri: str, content: bytes) -> None:
-    target = resolve_storage_path(root, relative_uri)
+    target = native_path(resolve_storage_path(root, relative_uri))
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    # A lease guarantees one writer per version. A fixed short sibling avoids
+    # exceeding MAX_PATH after workspace/document/version UUID segments.
+    temporary = target.with_name(".write.tmp")
     try:
         with temporary.open("wb") as handle:
             handle.write(content)
@@ -41,16 +48,16 @@ def write_parsed(root: Path, relative_uri: str, content: str) -> None:
 
 
 def read_bytes(root: Path, relative_uri: str) -> bytes:
-    return resolve_storage_path(root, relative_uri).read_bytes()
+    return native_path(resolve_storage_path(root, relative_uri)).read_bytes()
 
 
 def remove_file(root: Path, relative_uri: str) -> None:
-    target = resolve_storage_path(root, relative_uri)
+    target = native_path(resolve_storage_path(root, relative_uri))
     if target.exists():
         target.unlink()
 
 
 def remove_tree(root: Path, relative_uri: str) -> None:
-    target = resolve_storage_path(root, relative_uri)
+    target = native_path(resolve_storage_path(root, relative_uri))
     if target.exists():
         shutil.rmtree(target)

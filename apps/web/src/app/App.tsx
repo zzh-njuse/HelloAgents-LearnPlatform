@@ -28,6 +28,7 @@ import {
   fetchDocumentBatch,
   DocumentSummary,
   fetchDocuments,
+  fetchDocumentCourseImpact,
   fetchIngestionJob,
   fetchReadiness,
   fetchSystemInfo,
@@ -43,6 +44,7 @@ import {
   uploadDocumentBatch,
   Workspace
 } from "../lib/api";
+import { CoursePanel } from "./CoursePanel";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 
@@ -337,9 +339,14 @@ export function App() {
   }
 
   async function handleDelete(document: DocumentSummary) {
-    if (!selectedWorkspace || !window.confirm(`删除“${document.display_name}”？`)) return;
+    if (!selectedWorkspace) return;
     beginMaterialOperation();
-    try { await deleteDocument(selectedWorkspace.id, document.id); await refreshDocuments(); } catch (error) {
+    try {
+      const impact = await fetchDocumentCourseImpact(selectedWorkspace.id, document.id);
+      const impactText = impact.affected_course_count ? `\n${impact.affected_course_count} 门课程将保留，但来源会标记为不可用并停止新的生成、发布和激活。` : "";
+      if (!window.confirm(`删除“${document.display_name}”？${impactText}`)) return;
+      await deleteDocument(selectedWorkspace.id, document.id); await refreshDocuments();
+    } catch (error) {
       setMaterialError(error instanceof Error ? error.message : "删除失败");
     } finally { finishMaterialOperation(); }
   }
@@ -556,6 +563,7 @@ export function App() {
             </form>
           </section>
         </div>
+        {selectedWorkspace ? <CoursePanel documents={documents} workspaceId={selectedWorkspace.id} /> : null}
       </main>
     </div>
   );

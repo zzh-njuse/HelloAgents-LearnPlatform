@@ -8,6 +8,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 API_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = API_ROOT.parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 if str(API_ROOT) not in sys.path:
     sys.path.insert(0, str(API_ROOT))
 

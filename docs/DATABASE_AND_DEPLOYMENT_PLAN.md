@@ -133,6 +133,8 @@ lesson_versions
 lesson_citations
 ```
 
+Stage 3 一旦引入真正的 Tutor 或生成 Agent，必须同时保留最小可审计的 run/tool 记录。具体是扩展现有 trace，还是提前建立受限的 `agent_runs/tool_calls`，由 Stage 3 ADR 决定。Stage 5 的目标是统一治理、展示、成本与运维加固，不是等到 Stage 5 才第一次记录 Agent 运行事实。
+
 ### Stage 4：练习与记忆
 
 ```text

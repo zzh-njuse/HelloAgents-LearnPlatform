@@ -15,7 +15,7 @@
 
 ## 2. 当前状态
 
-当前状态：**Platform Stage 2：资料生命周期与引用检索已完成；Platform Stage 3：章节化学习与 Tutor 处于文档准备阶段**。
+当前状态：**Platform Stage 2 已完成；Platform Stage 3 Slice 1 的版本化课程与受控生成已完成，下一步准备 Slice 2 Tutor Spec/ADR**。
 
 已经完成：
 
@@ -25,7 +25,7 @@
 
 下一步：
 
-- 先为 Stage 3 完成事实盘点、Spec 和 ADR，人工确认后再开始章节、课程或 Tutor 业务实现。
+- Stage 3 Slice 1 已完成；Tutor、session 和 memory 仍须先完成 Slice 2 事实盘点、Spec/ADR 与人工 Gate，不由 Slice 1 合同隐式推出。
 - Stage 2 收尾结论和继承边界见 [Stage 2 总结与 Stage 3 输入](./02-platform-stage-2-material-lifecycle-and-citation-retrieval/STAGE_2_SUMMARY_AND_STAGE_3_INPUTS.md)。
 
 ## 3. Platform Stage 0R：基线重建
@@ -154,6 +154,7 @@ Office、图片 OCR、网页/Git 导入和更广泛 parser 不属于已确认的
 - Course Architect 与 Lesson Writer 的受控生成。
 - Course Reader 三栏核心体验。
 - Tutor 绑定 workspace、section、citation 和最小 memory context。
+- 第一个真正 Agent 上线时同步建立最小 run/tool trace，不把正确性审计推迟到 Stage 5。
 - 生成内容发布状态与重生成。
 - RAG/citation/lesson 最小 eval。
 
@@ -204,7 +205,22 @@ Office、图片 OCR、网页/Git 导入和更广泛 parser 不属于已确认的
 - 权威数据可备份，派生索引可重建。
 - 部署风险与默认暴露范围有明确说明。
 
-## 9. 阶段依赖
+## 9. Agent 基础能力演进大纲
+
+本节是跨阶段导航，不是已接受的实现合同。各项能力的具体切片、数据模型、框架复用方式和验收线，在进入对应 Stage 时重新分析并通过 Spec/ADR 确认。
+
+| 能力 | 已有基础 | 候选演进方向 | 必须后续分析 |
+|---|---|---|---|
+| RAG/citation | Stage 2 的资料、检索、权威回读和拒答 | 为课程生成和 Tutor 提供受控证据工具 | eval corpus、召回/拒答率、reranker 与上下文预算 |
+| Agent runtime/tool | `hello_agents` Agent/Tool 资产与 Stage 2 单轮回答 | 从受控 Tutor 开始，定义停止、权限、预算、取消和最小 trace | 直接复用、产品 adapter 或新 runtime 的取舍 |
+| Skill | framework/`academic_companion` 中的方法论资产 | 选择一个真实学习方法作为有版本的受控 Skill 样例 | 选择/组合规则、版本、输入输出、eval 和用户可见性 |
+| MCP | 现有 MCP client/server 和 research 外部资料经验 | 只在明确需要外部资料/工具时引入一个有界的场景 | 白名单、授权、来源、隐私、超时、成本和失败退路 |
+| 多 Agent | Course Architect、Lesson Writer、Tutor 的角色候选 | 只在职责和 artifact 真正可分时建立结构化交接 | 编排所有权、独立重试/取消、部分成功、人工 Gate 与成本放大 |
+| Memory | 现有本地 memory 原型，但无产品事实合同 | 先区分当前 session/context，再基于学习事件、掌握度和复习形成长期 memory | 写入/提升规则、来源、纠正、删除、过期、冲突和效果 eval |
+
+候选的整体节奏是：Stage 3 首次落地受控 Agent、RAG tool 和最小追踪；Stage 4 将学习事件、掌握度、练习/复习和可管理 memory 形成闭环；Stage 5 统一 eval、运行轨迹、成本和部署治理。Skill、MCP 和多 Agent 的确切引入时点不在本大纲中提前锁定。
+
+## 10. 阶段依赖
 
 ```text
 Stage 0R 基线
@@ -217,7 +233,7 @@ Stage 0R 基线
 
 后续 Stage 可以做设计预研，但不能绕过前一阶段的数据合同和验证 Gate 开始大规模实现。
 
-## 10. 文档交付标准
+## 11. 文档交付标准
 
 每个 Stage 至少包含：
 

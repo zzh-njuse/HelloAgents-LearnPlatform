@@ -11,11 +11,13 @@
 ## 开始任务前
 
 - 先读取 `docs/README.md`。
-- 产品方向读取：
+- 产品方向与执行手册必须完整读取，不得只依赖 `AGENTS.md` 的摘要或示例命令：
   - `docs/LEARNING_AGENT_BLUEPRINT.md`
   - `docs/SELF_HOST_DEVELOPMENT_ROADMAP.md`
   - `docs/DATABASE_AND_DEPLOYMENT_PLAN.md`
   - `docs/AGENT_COLLABORATION_PLAYBOOK.md`
+- `docs/AGENT_COLLABORATION_PLAYBOOK.md` 是本仓库的 Agent 交互与执行操作手册。开始实现、验证、独立 review、人工 gate、阶段收尾或调整执行策略前，必须核对其中对应章节；不得因根 `AGENTS.md` 已提供摘要而跳过。
+- 根 `AGENTS.md` 定义仓库级边界和强制门禁，Playbook 细化具体交互与执行流程。若两者的命令、参数、确认点或流程描述看似不一致，必须在执行前明确指出并请求人工确认，不得自行选择、合并或忽略其中一份。
 - 再读取当前 Stage 的 README、Spec、ADR、review 和阶段总结。
 - Stage 2 已完成；当前文档准备阶段是 `docs/03-platform-stage-3-chapter-learning-and-tutor/`。
 - 先检查 `git status --short --branch`，保留用户和其他 Agent 的未知改动。
@@ -97,13 +99,13 @@ ocr review --audience agent --background "brief business context"
 
 ```powershell
 ocr scan --preview --path apps/api/learn_platform_api
-ocr scan --audience human --path apps/api/learn_platform_api --concurrency 1 --timeout 5 --background "brief business context"
+ocr scan --audience human --path apps/api/learn_platform_api --concurrency 1 --timeout 10 --background "brief business context"
 ```
 
 - `ocr review` 审 Git diff，但当前 CLI 不支持 pathspec；不要为分块 review 临时 stash、移动或提交未知改动。
 - `ocr scan --path` 可按文件或目录分块，代价是扫描完整文件而非仅扫描 diff。建议依次审 API/数据链路、部署配置和 Web，并由 Codex 做一次跨块合同核对。
 - 需要观察运行进度时使用 `--audience human`；只有能接受无中间输出时才使用 `--audience agent`。
-- `--timeout` 单位为分钟。先缩小路径、设 `--concurrency 1`，再按 provider 实测调整超时；不要仅因无摘要输出就无限拉长等待。
+- `--timeout` 单位为分钟。真实 scan 默认遵循 Playbook 使用 `--timeout 10`；先 preview、按风险边界和 token 预估缩小路径、设 `--concurrency 1`，再按 provider 实测调整。范围、provider 或超时策略发生实质变化时必须按 Playbook 重新取得人工确认；不要仅因无摘要输出就无限拉长等待。
 
 若 `ocr` 不在 PATH，查找 `%USERPROFILE%\bin\ocr.exe`，不要硬编码或暴露 provider key。
 

@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     product_embedding_timeout_seconds: float = Field(default=30.0, gt=0)
     product_collection_name: str = "learn_platform_source_chunks_v1"
     ingestion_queue_name: str = "learn-platform-ingestion"
+    course_generation_queue_name: str = "learn-platform-course-generation"
     ingestion_lease_seconds: int = Field(default=120, gt=1)
     ingestion_heartbeat_seconds: int = Field(default=30, gt=0)
     ingestion_max_attempts: int = Field(default=3, ge=1)

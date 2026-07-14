@@ -161,6 +161,9 @@ cython_debug/
 .obsidian
 .pytest_cache
 .venv
+.api-deps/
+apps/api/.venv-test/
+apps/api/.pytest-tmp*/
 
 # 运行时生成数据（traces, sessions, todos）
 /memory/
@@ -178,4 +181,6 @@ cython_debug/
 /.claude/
 /_check_qdrant.py
 /_test_agent.py
+apps/api/t[0-9]*/
+apps/api/t/
 /research_report.md

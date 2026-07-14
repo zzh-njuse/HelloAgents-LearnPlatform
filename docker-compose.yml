@@ -110,7 +110,7 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-    command: ["rq", "worker", "--with-scheduler", "--url", "redis://redis:6379/0", "learn-platform-ingestion"]
+    command: ["rq", "worker", "--with-scheduler", "--url", "redis://redis:6379/0", "learn-platform-ingestion", "learn-platform-course-generation"]
     environment:
       APP_NAME: ${APP_NAME:-HelloAgents Learn}
       ENVIRONMENT: ${ENVIRONMENT:-development}
@@ -123,6 +123,10 @@ services:
       PRODUCT_EMBEDDING_MODEL: ${PRODUCT_EMBEDDING_MODEL:-text-embedding-v4}
       PRODUCT_EMBEDDING_DIMENSION: ${PRODUCT_EMBEDDING_DIMENSION:-1024}
       PRODUCT_EMBEDDING_BASE_URL: ${PRODUCT_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding}
+      PRODUCT_GENERATION_PROVIDER: ${PRODUCT_GENERATION_PROVIDER:-deepseek}
+      PRODUCT_GENERATION_MODEL: ${PRODUCT_GENERATION_MODEL:-deepseek-v4-flash}
+      PRODUCT_GENERATION_BASE_URL: ${PRODUCT_GENERATION_BASE_URL:-https://api.deepseek.com}
+      PRODUCT_GENERATION_API_KEY: ${PRODUCT_GENERATION_API_KEY:-}
       BATCH_MAX_FILES: ${BATCH_MAX_FILES:-20}
       BATCH_MAX_BYTES: ${BATCH_MAX_BYTES:-104857600}
       PDF_MAX_PAGES: ${PDF_MAX_PAGES:-500}

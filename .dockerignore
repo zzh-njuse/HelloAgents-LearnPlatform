@@ -2,6 +2,13 @@
 .venv
 **/__pycache__
 **/.pytest_cache
+**/.pytest-tmp*
+**/.api-deps
+**/.venv-test
+apps/api/t
+apps/api/t2
+apps/api/t3
+apps/api/t[0-9]*
 academic_companion/webui/node_modules
 academic_companion/webui/dist
 apps/web/node_modules

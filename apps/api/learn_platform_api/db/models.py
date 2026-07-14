@@ -203,3 +203,184 @@ class RagAnswerTrace(Base):
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Course(Base):
+    __tablename__ = "courses"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    goal: Mapped[str] = mapped_column(Text, nullable=False)
+    audience: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    lifecycle_status: Mapped[str] = mapped_column(String(20), default="active", nullable=False, index=True)
+    current_active_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("course_versions.id", name="fk_courses_current_active_version", use_alter=True, ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CourseVersion(Base):
+    __tablename__ = "course_versions"
+    __table_args__ = (UniqueConstraint("course_id", "version_number", name="uq_course_versions_number"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class CourseVersionSource(Base):
+    __tablename__ = "course_version_sources"
+    __table_args__ = (UniqueConstraint("course_version_id", "document_version_id", name="uq_course_version_sources_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    course_version_id: Mapped[str] = mapped_column(ForeignKey("course_versions.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    document_id: Mapped[str] = mapped_column(ForeignKey("source_documents.id"), index=True, nullable=False)
+    document_version_id: Mapped[str] = mapped_column(ForeignKey("document_versions.id"), index=True, nullable=False)
+
+
+class CourseSection(Base):
+    __tablename__ = "course_sections"
+    __table_args__ = (UniqueConstraint("course_version_id", "ordinal", name="uq_course_sections_ordinal"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    course_version_id: Mapped[str] = mapped_column(ForeignKey("course_versions.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class CourseSectionCitation(Base):
+    __tablename__ = "course_section_citations"
+    __table_args__ = (UniqueConstraint("course_section_id", "document_chunk_id", name="uq_course_section_citations_chunk"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    course_section_id: Mapped[str] = mapped_column(ForeignKey("course_sections.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    document_id: Mapped[str] = mapped_column(ForeignKey("source_documents.id"), nullable=False)
+    document_version_id: Mapped[str] = mapped_column(ForeignKey("document_versions.id"), nullable=False)
+    document_chunk_id: Mapped[str] = mapped_column(ForeignKey("document_chunks.id"), nullable=False)
+
+
+class Lesson(Base):
+    __tablename__ = "lessons"
+    __table_args__ = (UniqueConstraint("course_section_id", "ordinal", name="uq_lessons_ordinal"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    course_version_id: Mapped[str] = mapped_column(ForeignKey("course_versions.id"), index=True, nullable=False)
+    course_section_id: Mapped[str] = mapped_column(ForeignKey("course_sections.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+    current_published_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("lesson_versions.id", name="fk_lessons_current_published_version", use_alter=True, ondelete="SET NULL"),
+        nullable=True,
+    )
+
+
+class LessonVersion(Base):
+    __tablename__ = "lesson_versions"
+    __table_args__ = (UniqueConstraint("lesson_id", "version_number", name="uq_lesson_versions_number"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lesson_id: Mapped[str] = mapped_column(ForeignKey("lessons.id"), index=True, nullable=False)
+    course_version_id: Mapped[str] = mapped_column(ForeignKey("course_versions.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    learning_objectives: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    blocks: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class LessonCitation(Base):
+    __tablename__ = "lesson_citations"
+    __table_args__ = (UniqueConstraint("lesson_version_id", "block_key", "document_chunk_id", name="uq_lesson_citations_block_chunk"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lesson_version_id: Mapped[str] = mapped_column(ForeignKey("lesson_versions.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    block_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    document_id: Mapped[str] = mapped_column(ForeignKey("source_documents.id"), nullable=False)
+    document_version_id: Mapped[str] = mapped_column(ForeignKey("document_versions.id"), nullable=False)
+    document_chunk_id: Mapped[str] = mapped_column(ForeignKey("document_chunks.id"), nullable=False)
+
+
+class CourseGenerationJob(Base):
+    __tablename__ = "course_generation_jobs"
+    __table_args__ = (UniqueConstraint("workspace_id", "idempotency_key", name="uq_course_generation_jobs_workspace_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id"), index=True, nullable=False)
+    course_version_id: Mapped[str | None] = mapped_column(ForeignKey("course_versions.id"), index=True, nullable=True)
+    lesson_id: Mapped[str | None] = mapped_column(ForeignKey("lessons.id"), index=True, nullable=True)
+    job_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    worker_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class CourseGenerationJobSource(Base):
+    __tablename__ = "course_generation_job_sources"
+    __table_args__ = (UniqueConstraint("course_generation_job_id", "document_version_id", name="uq_course_generation_job_sources_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    course_generation_job_id: Mapped[str] = mapped_column(ForeignKey("course_generation_jobs.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    document_id: Mapped[str] = mapped_column(ForeignKey("source_documents.id"), index=True, nullable=False)
+    document_version_id: Mapped[str] = mapped_column(ForeignKey("document_versions.id"), index=True, nullable=False)
+
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    course_generation_job_id: Mapped[str] = mapped_column(ForeignKey("course_generation_jobs.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(40), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    step_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AgentToolCall(Base):
+    __tablename__ = "agent_tool_calls"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    agent_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    input_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    result_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

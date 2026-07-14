@@ -9,7 +9,7 @@ from learn_platform_api.db.models import IngestionJob, Workspace
 from learn_platform_api.schemas.documents import AnswerRequest, AnswerResponse, DocumentSummaryRead, DocumentUploadRead, IngestionBatchRead, IngestionJobRead, RetrievalQuery, RetrievalResponse
 from learn_platform_api.services.answers import answer_question
 from learn_platform_api.services.batches import cancel_batch, create_batch, get_batch, retry_batch
-from learn_platform_api.services.documents import create_document, delete_document, document_summary, get_document, list_documents, retry_job
+from learn_platform_api.services.documents import create_document, delete_document, document_course_impact, document_summary, get_document, list_documents, retry_job
 from learn_platform_api.services.retrieval import retrieve
 from learn_platform_api.settings import get_settings
 
@@ -66,6 +66,13 @@ def delete_document_endpoint(workspace_id: str, document_id: str, db: Session = 
     if job is None:
         raise HTTPException(status_code=404, detail="资料不存在")
     return job
+
+
+@router.get("/documents/{document_id}/course-impact")
+def document_course_impact_endpoint(workspace_id: str, document_id: str, db: Session = Depends(get_db)):
+    if get_document(db, workspace_id, document_id) is None:
+        raise HTTPException(status_code=404, detail="资料不存在")
+    return {"affected_course_count": document_course_impact(db, workspace_id, document_id)}
 
 
 @router.post("/ingestion-jobs/{job_id}/retry", response_model=IngestionJobRead, status_code=status.HTTP_202_ACCEPTED)
