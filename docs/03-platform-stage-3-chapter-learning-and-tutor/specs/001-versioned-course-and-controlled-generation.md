@@ -132,7 +132,7 @@ Slice 1 完成时必须同时满足：
 1. Course Version 至少有一个已发布 Lesson Version 后才允许激活。
 2. 激活新 Course Version 原子替换 `current_active_version_id`；旧版本进入 archived，但仍可通过历史 API 查看。
 3. Course Reader 展示当前激活大纲，已发布课节可阅读；未生成或仅有草稿的课节显示明确状态。
-4. citation 点击后定位 document、version、chunk、heading 和字符偏移；资料不可用时显示原因，不伪造可点击来源。
+4. citation 的用户可读展示按“文件名 > 章节路径 > 第 N-M 页”逐级提供已有信息；内部 document/version/chunk ID 和字符偏移保留用于服务端校验，不作为主展示。非 PDF 或旧资料没有页码时允许省略页码；资料不可用时显示原因，不伪造可点击来源。
 5. 后续仍可为激活版本的其他 Lesson 生成并发布内容，但不能原地修改已有 Lesson Version。
 
 ### 8.4 来源变化

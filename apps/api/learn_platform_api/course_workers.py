@@ -64,11 +64,23 @@ def run_course_generation_job(job_id: str) -> None:
         except ValueError as exc:
             db.rollback()
             job = db.get(CourseGenerationJob, job_id)
-            if not job or job.status != "running" or job.worker_id != worker_id:
+            if not job or job.worker_id != worker_id:
+                return
+            if job.status == "cancel_requested":
+                job.status = "canceled"
+                job.error_code = "generation_canceled"
+                job.error_message = "课程生成已取消"
+                job.worker_id = None
+                job.lease_expires_at = None
+                job.heartbeat_at = None
+                job.next_attempt_at = None
+                db.commit()
+                return
+            if job.status != "running":
                 return
             code = str(exc)
             db.add(AgentRun(course_generation_job_id=job.id, workspace_id=job.workspace_id, role="course_architect" if job.job_type == "course_outline" else "lesson_writer", attempt_number=job.attempt_count, status="failed", step_count=0, error_code=code, completed_at=datetime.now(timezone.utc)))
-            retryable = code in {"generation_provider_unavailable", "invalid_agent_artifact"} and job.attempt_count < settings.ingestion_max_attempts
+            retryable = code in {"generation_provider_unavailable", "invalid_agent_artifact", "lesson_coverage_invalid"} and job.attempt_count < settings.ingestion_max_attempts
             job.status = "retry_wait" if retryable else ("canceled" if code == "generation_canceled" else "failed")
             job.error_code = code
             job.error_message = {
@@ -78,6 +90,10 @@ def run_course_generation_job(job_id: str) -> None:
                 "insufficient_evidence": "当前资料不足以生成内容",
                 "invalid_agent_artifact": "生成结果未通过结构或引用校验",
                 "agent_step_budget_exceeded": "课程生成超过受控步骤预算",
+                "lesson_coverage_invalid": "课节覆盖计划无效，请重试",
+                "lesson_evidence_insufficient": "当前资料不足以完整讲解这个课节",
+                "lesson_budget_exceeded": "课节生成达到运行预算，未提交截断草稿",
+                "lesson_coverage_incomplete": "课节内容复核后仍有核心缺口，请重试",
                 "generation_canceled": "课程生成已取消",
             }.get(code, "课程生成失败")
             job.lease_expires_at = None
@@ -87,7 +103,19 @@ def run_course_generation_job(job_id: str) -> None:
             logger.exception("course_generation_internal_error job_id=%s", job_id)
             db.rollback()
             job = db.get(CourseGenerationJob, job_id)
-            if not job or job.status != "running" or job.worker_id != worker_id:
+            if not job or job.worker_id != worker_id:
+                return
+            if job.status == "cancel_requested":
+                job.status = "canceled"
+                job.error_code = "generation_canceled"
+                job.error_message = "课程生成已取消"
+                job.worker_id = None
+                job.lease_expires_at = None
+                job.heartbeat_at = None
+                job.next_attempt_at = None
+                db.commit()
+                return
+            if job.status != "running":
                 return
             db.add(AgentRun(course_generation_job_id=job.id, workspace_id=job.workspace_id, role="course_architect" if job.job_type == "course_outline" else "lesson_writer", attempt_number=job.attempt_count, status="failed", step_count=0, error_code="generation_internal_error", completed_at=datetime.now(timezone.utc)))
             job.status = "failed"

@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     product_collection_name: str = "learn_platform_source_chunks_v1"
     ingestion_queue_name: str = "learn-platform-ingestion"
     course_generation_queue_name: str = "learn-platform-course-generation"
+    workspace_deletion_queue_name: str = "learn-platform-workspace-deletion"
+    tutor_queue_name: str = "learn-platform-tutor"
+    tutor_max_evidence_tokens: int = Field(default=8_000, gt=0)
+    tutor_max_output_tokens: int = Field(default=2_000, gt=0)
     ingestion_lease_seconds: int = Field(default=120, gt=1)
     ingestion_heartbeat_seconds: int = Field(default=30, gt=0)
     ingestion_max_attempts: int = Field(default=3, ge=1)
@@ -59,6 +63,13 @@ class Settings(BaseSettings):
     product_generation_thinking: bool = False
     product_generation_max_evidence_tokens: int = Field(default=12_000, gt=0)
     product_generation_max_output_tokens: int = Field(default=1_500, gt=0)
+    lesson_generation_max_evidence_tokens: int = Field(default=48_000, gt=0)
+    lesson_generation_max_output_tokens_per_call: int = Field(default=8_000, gt=0)
+    lesson_generation_max_total_output_tokens: int = Field(default=32_000, gt=0)
+    lesson_generation_max_provider_calls: int = Field(default=12, ge=4)
+    lesson_generation_max_coverage_units: int = Field(default=8, ge=1, le=8)
+    lesson_generation_timeout_seconds: float = Field(default=180.0, gt=0)
+    lesson_generation_max_wall_seconds: int = Field(default=1_200, gt=0)
 
     request_id_header: str = "X-Request-ID"
     readiness_timeout_seconds: float = 2.0

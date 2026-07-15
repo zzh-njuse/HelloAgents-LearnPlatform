@@ -25,6 +25,7 @@ import {
   cancelDocumentBatch,
   createWorkspace,
   deleteDocument,
+  deleteWorkspace,
   fetchDocumentBatch,
   DocumentSummary,
   fetchDocuments,
@@ -33,16 +34,21 @@ import {
   fetchReadiness,
   fetchSystemInfo,
   fetchWorkspaces,
+  fetchWorkspaceDeletionImpact,
+  fetchWorkspaceDeletionJob,
   IngestionJob,
   IngestionBatch,
   Readiness,
   RetrievalResult,
   retryIngestionJob,
   retryDocumentBatch,
+  retryWorkspaceDeletion,
   searchMaterials,
   SystemInfo,
   uploadDocumentBatch,
-  Workspace
+  Workspace,
+  WorkspaceDeletionImpact,
+  WorkspaceDeletionJob
 } from "../lib/api";
 import { CoursePanel } from "./CoursePanel";
 
@@ -79,8 +85,15 @@ export function App() {
   const [searchResults, setSearchResults] = useState<RetrievalResult[]>([]);
   const [answer, setAnswer] = useState<Awaited<ReturnType<typeof answerMaterials>> | null>(null);
   const [documents, setDocuments] = useState<DocumentSummary[]>([]);
+  const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
+  const [deleteImpact, setDeleteImpact] = useState<WorkspaceDeletionImpact | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleteState, setDeleteState] = useState<LoadState>("idle");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletionJob, setDeletionJob] = useState<WorkspaceDeletionJob | null>(null);
   const documentsRequest = useRef(0);
   const activeWorkspaceId = useRef<string | null>(null);
+  const workspaceDeletionKey = useRef<string | null>(null);
 
   const selectedWorkspace = useMemo(
     () => workspaces.find((workspace) => workspace.id === selectedId) ?? null,
@@ -172,6 +185,14 @@ export function App() {
   }, [refreshDocuments]);
 
   useEffect(() => {
+    if (!deletionJob || !["queued", "running", "retry_wait"].includes(deletionJob.status)) return;
+    const timer = window.setInterval(() => {
+      void fetchWorkspaceDeletionJob(deletionJob.id).then(setDeletionJob).catch(() => undefined);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [deletionJob]);
+
+  useEffect(() => {
     if (!selectedWorkspace || !materialJob || !["queued", "running", "retry_wait"].includes(materialJob.status)) return;
     const timer = window.setInterval(() => {
       void fetchIngestionJob(selectedWorkspace.id, materialJob.id)
@@ -235,6 +256,7 @@ export function App() {
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedWorkspace || selectedFiles.length === 0) return;
+    const workspaceId = selectedWorkspace.id;
     if (selectedFiles.length > 20 || selectedFiles.some((file) => file.size > 25 * 1024 * 1024) || selectedFiles.reduce((total, file) => total + file.size, 0) > 100 * 1024 * 1024) {
       setMaterialError("单文件最多 25 MiB；单批最多 20 个文件且合计不超过 100 MiB");
       return;
@@ -243,7 +265,8 @@ export function App() {
     setMaterialError(null);
     try {
       const key = typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
-      const result = await uploadDocumentBatch(selectedWorkspace.id, selectedFiles, key);
+      const result = await uploadDocumentBatch(workspaceId, selectedFiles, key);
+      if (activeWorkspaceId.current !== workspaceId) return;
       setMaterialBatch(result);
       setMaterialName(selectedFiles.length === 1 ? selectedFiles[0].name : `${selectedFiles.length} 份资料`);
       void refreshDocuments();
@@ -292,28 +315,33 @@ export function App() {
 
   async function handleBatchRetry() {
     if (!selectedWorkspace || !materialBatch) return;
+    const workspaceId = selectedWorkspace.id;
     beginMaterialOperation();
     setMaterialError(null);
-    try { setMaterialBatch(await retryDocumentBatch(selectedWorkspace.id, materialBatch.id)); } catch (error) {
+    try { const batch = await retryDocumentBatch(workspaceId, materialBatch.id); if (activeWorkspaceId.current === workspaceId) setMaterialBatch(batch); } catch (error) {
       setMaterialError(error instanceof Error ? error.message : "批量重试失败");
     } finally { finishMaterialOperation(); }
   }
 
   async function handleBatchCancel() {
     if (!selectedWorkspace || !materialBatch || !window.confirm("取消尚未完成的资料处理？已成功资料会保留。")) return;
+    const workspaceId = selectedWorkspace.id;
     beginMaterialOperation();
     setMaterialError(null);
-    try { setMaterialBatch(await cancelDocumentBatch(selectedWorkspace.id, materialBatch.id)); } catch (error) {
+    try { const batch = await cancelDocumentBatch(workspaceId, materialBatch.id); if (activeWorkspaceId.current === workspaceId) setMaterialBatch(batch); } catch (error) {
       setMaterialError(error instanceof Error ? error.message : "取消批次失败");
     } finally { finishMaterialOperation(); }
   }
 
   async function handleRetry() {
     if (!selectedWorkspace || !materialJob) return;
+    const workspaceId = selectedWorkspace.id;
     beginMaterialOperation();
     setMaterialError(null);
     try {
-      setMaterialJob(await retryIngestionJob(selectedWorkspace.id, materialJob.id));
+      const job = await retryIngestionJob(workspaceId, materialJob.id);
+      if (activeWorkspaceId.current !== workspaceId) return;
+      setMaterialJob(job);
       await refreshDocuments();
     } catch (error) {
       setMaterialError(error instanceof Error ? error.message : "重试失败");
@@ -324,10 +352,12 @@ export function App() {
 
   async function handleDocumentRetry(document: DocumentSummary) {
     if (!selectedWorkspace || !document.latest_job) return;
+    const workspaceId = selectedWorkspace.id;
     beginMaterialOperation();
     setMaterialError(null);
     try {
-      const job = await retryIngestionJob(selectedWorkspace.id, document.latest_job.id);
+      const job = await retryIngestionJob(workspaceId, document.latest_job.id);
+      if (activeWorkspaceId.current !== workspaceId) return;
       setMaterialName(document.display_name);
       setMaterialJob(job);
       await refreshDocuments();
@@ -349,6 +379,51 @@ export function App() {
     } catch (error) {
       setMaterialError(error instanceof Error ? error.message : "删除失败");
     } finally { finishMaterialOperation(); }
+  }
+
+  async function openWorkspaceDelete() {
+    if (!selectedWorkspace) return;
+    setDeleteTarget(selectedWorkspace);
+    setDeleteImpact(null);
+    setDeleteConfirmation("");
+    setDeleteError(null);
+    setDeleteState("loading");
+    workspaceDeletionKey.current = crypto.randomUUID();
+    try {
+      setDeleteImpact(await fetchWorkspaceDeletionImpact(selectedWorkspace.id));
+      setDeleteState("ready");
+    } catch (error) {
+      setDeleteState("error");
+      setDeleteError(error instanceof Error ? error.message : "无法读取删除影响");
+    }
+  }
+
+  async function handleWorkspaceDelete(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!deleteTarget || deleteConfirmation !== deleteTarget.name) return;
+    setDeleteState("loading");
+    setDeleteError(null);
+    try {
+      const job = await deleteWorkspace(deleteTarget.id, deleteConfirmation, workspaceDeletionKey.current ?? crypto.randomUUID());
+      setDeletionJob(job);
+      setDeleteTarget(null);
+      workspaceDeletionKey.current = null;
+      setWorkspaces((current) => current.filter((workspace) => workspace.id !== job.workspace_id));
+      setSelectedId((current) => current === job.workspace_id ? null : current);
+      await refresh();
+    } catch (error) {
+      setDeleteState("error");
+      setDeleteError(error instanceof Error ? error.message : "删除 Workspace 失败");
+    }
+  }
+
+  async function handleWorkspaceDeleteRetry() {
+    if (!deletionJob) return;
+    try {
+      setDeletionJob(await retryWorkspaceDeletion(deletionJob.id));
+    } catch (error) {
+      setDeletionJob({ ...deletionJob, error_message: error instanceof Error ? error.message : "重试失败" });
+    }
   }
 
   return (
@@ -404,6 +479,10 @@ export function App() {
             <span className="eyebrow">{systemInfo?.environment ?? "development"}</span>
             <h1>{selectedWorkspace?.name ?? "平台工作台"}</h1>
             <p>{selectedWorkspace?.description ?? "建立学习资料、任务与进度的统一归属。"}</p>
+            <select aria-label="切换 Workspace" className="mobile-workspace-select" onChange={(event) => setSelectedId(event.target.value || null)} value={selectedId ?? ""}>
+              <option value="">选择 Workspace</option>
+              {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
+            </select>
           </div>
           <button
             aria-label="刷新平台状态"
@@ -424,6 +503,14 @@ export function App() {
           </div>
         ) : null}
 
+        {deletionJob ? (
+          <div className={deletionJob.status === "failed" || deletionJob.status === "queue_failed" ? "notice error" : "notice deletion-notice"} role="status">
+            {deletionJob.status === "succeeded" ? <CheckCircle2 size={18} /> : deletionJob.status === "failed" || deletionJob.status === "queue_failed" ? <TriangleAlert size={18} /> : <LoaderCircle className="spin" size={18} />}
+            <span>Workspace 删除任务：{formatStatus(deletionJob.status)}{deletionJob.error_message ? ` · ${deletionJob.error_message}` : ""}</span>
+            {deletionJob.status === "failed" || deletionJob.status === "queue_failed" ? <button className="secondary-button" onClick={() => void handleWorkspaceDeleteRetry()} type="button"><RefreshCw size={15} />重试</button> : null}
+          </div>
+        ) : null}
+
         <section className="status-band" aria-label="系统状态">
           <StatusItem icon={<Server />} label="API" ok={loadState !== "error"} detail={loadState === "error" ? "不可用" : "已连接"} />
           <StatusItem icon={<Database />} label="Postgres" {...readiness.checks.postgres} />
@@ -439,7 +526,10 @@ export function App() {
                 <span className="eyebrow">当前空间</span>
                 <h2 id="workspace-title">{selectedWorkspace?.name ?? "尚未创建 workspace"}</h2>
               </div>
-              <FileStack size={21} />
+              <div className="section-heading-actions">
+                {selectedWorkspace ? <button aria-label="删除当前 Workspace" className="icon-button danger-icon" onClick={() => void openWorkspaceDelete()} title="删除 Workspace" type="button"><Trash2 /></button> : null}
+                <FileStack size={21} />
+              </div>
             </div>
 
             {selectedWorkspace ? (
@@ -565,6 +655,25 @@ export function App() {
         </div>
         {selectedWorkspace ? <CoursePanel documents={documents} workspaceId={selectedWorkspace.id} /> : null}
       </main>
+      {deleteTarget ? (
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target && deleteState !== "loading") setDeleteTarget(null); }}>
+          <section aria-labelledby="delete-workspace-title" aria-modal="true" className="confirm-dialog" role="dialog">
+            <header>
+              <div><span className="eyebrow">不可撤销</span><h2 id="delete-workspace-title">删除 Workspace</h2></div>
+              <button aria-label="关闭" className="icon-button" disabled={deleteState === "loading"} onClick={() => setDeleteTarget(null)} title="关闭" type="button"><X /></button>
+            </header>
+            <p>删除后将立即隐藏并停止写入，后台会清理关联资源。备份不在此次删除范围内。</p>
+            {deleteImpact ? <dl className="impact-grid"><div><dt>资料</dt><dd>{deleteImpact.document_count}</dd></div><div><dt>课程</dt><dd>{deleteImpact.course_count}</dd></div><div><dt>运行中任务</dt><dd>{deleteImpact.active_job_count}</dd></div><div><dt>Tutor 会话</dt><dd>{deleteImpact.tutor_session_count}</dd></div></dl> : null}
+            {deleteState === "loading" && !deleteImpact ? <p className="dialog-loading"><LoaderCircle className="spin" size={17} />正在读取影响范围</p> : null}
+            <form onSubmit={handleWorkspaceDelete}>
+              <label htmlFor="delete-workspace-confirmation">输入 <strong>{deleteTarget.name}</strong> 确认删除</label>
+              <input autoComplete="off" id="delete-workspace-confirmation" onChange={(event) => setDeleteConfirmation(event.target.value)} value={deleteConfirmation} />
+              {deleteError ? <p className="form-error" role="alert">{deleteError}</p> : null}
+              <div className="dialog-actions"><button className="secondary-button" disabled={deleteState === "loading"} onClick={() => setDeleteTarget(null)} type="button">取消</button><button className="danger-button" disabled={!deleteImpact || deleteConfirmation !== deleteTarget.name || deleteState === "loading"} type="submit">{deleteState === "loading" ? <LoaderCircle className="spin" size={16} /> : <Trash2 size={16} />}删除</button></div>
+            </form>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

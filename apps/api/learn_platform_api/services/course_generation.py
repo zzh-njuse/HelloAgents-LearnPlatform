@@ -9,8 +9,8 @@ from pydantic import ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from academic_companion.course_agents import CourseAgentRequest, CourseOutlineArtifact, LessonDraftArtifact, build_generation_prompt, build_search_prompt, validate_citations
-from learn_platform_api.db.models import AgentRun, AgentToolCall, Course, CourseGenerationJob, CourseGenerationJobSource, CourseSection, CourseSectionCitation, CourseVersion, CourseVersionSource, Lesson, LessonCitation, LessonVersion, SourceDocument, DocumentChunk, DocumentVersion
+from academic_companion.course_agents import CourseAgentRequest, CourseOutlineArtifact, LessonCoveragePlan, LessonCoverageVerification, LessonDraftArtifact, LessonRepairArtifact, LessonUnitArtifact, build_generation_prompt, build_lesson_coverage_prompt, build_lesson_repair_prompt, build_lesson_unit_prompt, build_lesson_unit_repair_prompt, build_lesson_verification_prompt, build_search_prompt, validate_citations
+from learn_platform_api.db.models import AgentRun, AgentToolCall, Course, CourseGenerationJob, CourseGenerationJobSource, CourseSection, CourseSectionCitation, CourseVersion, CourseVersionSource, Lesson, LessonCitation, LessonVersion, SourceDocument, DocumentChunk, DocumentVersion, Workspace
 from learn_platform_api.services.retrieval import retrieve
 from learn_platform_api.settings import Settings
 
@@ -48,20 +48,20 @@ def evidence_search(db: Session, settings: Settings, job: CourseGenerationJob, q
     return evidence, chunks
 
 
-def call_provider(settings: Settings, messages: list[dict[str, str]]) -> tuple[dict[str, Any], dict[str, int | None]]:
+def call_provider(settings: Settings, messages: list[dict[str, str]], max_output_tokens: int | None = None, timeout_seconds: float | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     if not settings.product_generation_api_key:
         raise ValueError("generation_provider_unconfigured")
     try:
         response = httpx.post(
             f"{settings.product_generation_base_url.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {settings.product_generation_api_key}"},
-            json={"model": settings.product_generation_model, "messages": messages, "response_format": {"type": "json_object"}, "max_tokens": settings.product_generation_max_output_tokens, "temperature": 0.2},
-            timeout=settings.product_generation_timeout_seconds,
+            json={"model": settings.product_generation_model, "messages": messages, "response_format": {"type": "json_object"}, "max_tokens": max_output_tokens or settings.product_generation_max_output_tokens, "temperature": 0.2},
+            timeout=timeout_seconds or settings.product_generation_timeout_seconds,
         )
         response.raise_for_status()
         body = response.json()
         content = body["choices"][0]["message"]["content"]
-        return json.loads(content), {"input_tokens": body.get("usage", {}).get("prompt_tokens"), "output_tokens": body.get("usage", {}).get("completion_tokens")}
+        return json.loads(content), {"input_tokens": body.get("usage", {}).get("prompt_tokens"), "output_tokens": body.get("usage", {}).get("completion_tokens"), "finish_reason": body["choices"][0].get("finish_reason")}
     except (httpx.HTTPError, KeyError, TypeError, json.JSONDecodeError) as exc:
         raise ValueError("generation_provider_unavailable") from exc
 
@@ -126,15 +126,213 @@ def persist_lesson(db: Session, job: CourseGenerationJob, artifact: LessonDraftA
     return version
 
 
+def _lesson_job_active(db: Session, job: CourseGenerationJob, settings: Settings, started: float) -> None:
+    db.refresh(job)
+    if time.monotonic() - started > settings.lesson_generation_max_wall_seconds:
+        raise ValueError("lesson_budget_exceeded")
+    workspace = db.get(Workspace, job.workspace_id)
+    if workspace is None or workspace.lifecycle_status != "active" or job.status != "running" or (job.lease_expires_at and job.lease_expires_at < now()):
+        raise ValueError("generation_canceled")
+
+
+def _lesson_evidence_search(db: Session, settings: Settings, job: CourseGenerationJob, query: str) -> list[DocumentChunk]:
+    rows = snapshot_rows(db, job)
+    document_ids = [document.id for _, document, _ in rows]
+    _, results = retrieve(db, settings, job.workspace_id, query, 8, document_ids=document_ids)
+    chunks: list[DocumentChunk] = []
+    for result in results:
+        chunk = db.get(DocumentChunk, result.citation.chunk_id)
+        if chunk is not None:
+            chunks.append(chunk)
+    return chunks
+
+
+def _execute_lesson_generation(db: Session, settings: Settings, job: CourseGenerationJob, request: CourseAgentRequest) -> None:
+    run = AgentRun(course_generation_job_id=job.id, workspace_id=job.workspace_id, role="lesson_writer", attempt_number=job.attempt_count, status="running")
+    db.add(run)
+    db.flush()
+    started = time.monotonic()
+    ordinal = 0
+    provider_calls = 0
+    input_tokens = 0
+    output_tokens = 0
+
+    def provider_phase(name: str, messages: list[dict[str, str]]) -> dict[str, Any]:
+        nonlocal ordinal, provider_calls, input_tokens, output_tokens
+        _lesson_job_active(db, job, settings, started)
+        if provider_calls >= settings.lesson_generation_max_provider_calls:
+            raise ValueError("lesson_budget_exceeded")
+        phase_started = time.perf_counter()
+        generated, usage = call_provider(
+            settings,
+            messages,
+            settings.lesson_generation_max_output_tokens_per_call,
+            settings.lesson_generation_timeout_seconds,
+        )
+        provider_calls += 1
+        _lesson_job_active(db, job, settings, started)
+        ordinal += 1
+        used_input = usage.get("input_tokens") or 0
+        used_output = usage.get("output_tokens")
+        if used_output is None:
+            used_output = max(1, int(len(json.dumps(generated, ensure_ascii=False)) * 0.6))
+        input_tokens += int(used_input)
+        output_tokens += int(used_output)
+        _tool_call(db, run, name, ordinal, None, 1, phase_started)
+        if usage.get("finish_reason") == "length" or output_tokens > settings.lesson_generation_max_total_output_tokens:
+            raise ValueError("lesson_budget_exceeded")
+        return generated
+
+    try:
+        plan = LessonCoveragePlan.model_validate(provider_phase(
+            "PlanLessonCoverage",
+            build_lesson_coverage_prompt(request, settings.lesson_generation_max_coverage_units),
+        ))
+    except ValidationError as exc:
+        raise ValueError("lesson_coverage_invalid") from exc
+    if len(plan.units) > settings.lesson_generation_max_coverage_units:
+        raise ValueError("lesson_coverage_invalid")
+
+    evidence: list[dict[str, str]] = []
+    chunks: dict[str, DocumentChunk] = {}
+    evidence_by_unit: dict[str, list[dict[str, str]]] = {}
+    seen_chunk_ids: set[str] = set()
+    evidence_tokens = 0
+    for unit in plan.units:
+        _lesson_job_active(db, job, settings, started)
+        search_started = time.perf_counter()
+        found = _lesson_evidence_search(db, settings, job, unit.search_query)
+        unit_evidence: list[dict[str, str]] = []
+        for chunk in found:
+            if chunk.id in seen_chunk_ids:
+                existing = next((item for item in evidence if chunks[item["citation_id"]].id == chunk.id), None)
+                if existing:
+                    unit_evidence.append(existing)
+                continue
+            estimated = max(1, int(len(chunk.content) * 0.6))
+            if evidence_tokens + estimated > settings.lesson_generation_max_evidence_tokens:
+                continue
+            citation_id = f"e{len(evidence) + 1}"
+            item = {"citation_id": citation_id, "text": chunk.content}
+            evidence.append(item)
+            unit_evidence.append(item)
+            chunks[citation_id] = chunk
+            seen_chunk_ids.add(chunk.id)
+            evidence_tokens += estimated
+        ordinal += 1
+        _tool_call(db, run, "CourseEvidenceSearch", ordinal, unit.search_query, len(unit_evidence), search_started)
+        if not unit_evidence:
+            if evidence_tokens >= settings.lesson_generation_max_evidence_tokens:
+                raise ValueError("lesson_budget_exceeded")
+            raise ValueError("lesson_evidence_insufficient")
+        evidence_by_unit[unit.unit_key] = unit_evidence
+
+    def validate_unit(unit, generated: dict[str, Any]) -> LessonUnitArtifact:
+        candidate = dict(generated)
+        candidate["unit_key"] = unit.unit_key
+        artifact = LessonUnitArtifact.model_validate(candidate)
+        validate_citations(
+            LessonDraftArtifact(title=request.lesson_title or request.title, learning_objectives=plan.learning_objectives, blocks=artifact.blocks),
+            {item["citation_id"] for item in evidence_by_unit[unit.unit_key]},
+        )
+        return artifact
+
+    units: list[LessonUnitArtifact] = []
+    for unit in plan.units:
+        generated = provider_phase(
+            "WriteLessonUnit",
+            build_lesson_unit_prompt(request, unit, evidence_by_unit[unit.unit_key]),
+        )
+        try:
+            artifact = validate_unit(unit, generated)
+        except (ValidationError, ValueError) as exc:
+            try:
+                repaired = provider_phase(
+                    "RepairLessonUnit",
+                    build_lesson_unit_repair_prompt(request, unit, evidence_by_unit[unit.unit_key], generated),
+                )
+                artifact = validate_unit(unit, repaired)
+            except (ValidationError, ValueError) as repair_exc:
+                raise ValueError("invalid_agent_artifact") from repair_exc
+        units.append(artifact)
+
+    def verify() -> LessonCoverageVerification:
+        try:
+            return LessonCoverageVerification.model_validate(provider_phase(
+                "VerifyLessonCoverage",
+                build_lesson_verification_prompt(plan, units),
+            ))
+        except ValidationError as exc:
+            raise ValueError("lesson_coverage_invalid") from exc
+
+    verification = verify()
+    if not verification.complete:
+        requested = {revision.unit_key for revision in verification.revisions}
+        if not requested.issubset({unit.unit_key for unit in units}):
+            raise ValueError("lesson_coverage_invalid")
+        try:
+            repaired = LessonRepairArtifact.model_validate(provider_phase(
+                "RepairLessonCoverage",
+                build_lesson_repair_prompt(plan, units, verification.revisions, evidence_by_unit),
+            ))
+        except ValidationError as exc:
+            raise ValueError("invalid_agent_artifact") from exc
+        if {unit.unit_key for unit in repaired.units} != requested:
+            raise ValueError("invalid_agent_artifact")
+        replacements = {unit.unit_key: unit for unit in repaired.units}
+        for repaired_unit in repaired.units:
+            try:
+                validate_citations(
+                    LessonDraftArtifact(title=request.lesson_title or request.title, learning_objectives=plan.learning_objectives, blocks=repaired_unit.blocks),
+                    {item["citation_id"] for item in evidence_by_unit[repaired_unit.unit_key]},
+                )
+            except (ValidationError, ValueError) as exc:
+                raise ValueError("invalid_agent_artifact") from exc
+        units = [replacements.get(unit.unit_key, unit) for unit in units]
+        if not verify().complete:
+            raise ValueError("lesson_coverage_incomplete")
+
+    blocks = [block for unit in units for block in unit.blocks]
+    try:
+        artifact = LessonDraftArtifact(
+            title=request.lesson_title or request.title,
+            learning_objectives=plan.learning_objectives,
+            blocks=blocks,
+        )
+        validate_citations(artifact, set(chunks))
+    except (ValidationError, ValueError) as exc:
+        raise ValueError("invalid_agent_artifact") from exc
+
+    _lesson_job_active(db, job, settings, started)
+    submit_started = time.perf_counter()
+    persist_lesson(db, job, artifact, chunks)
+    ordinal += 1
+    _tool_call(db, run, "SubmitLessonDraft", ordinal, None, 1, submit_started)
+    run.status = "succeeded"
+    run.step_count = provider_calls
+    run.input_tokens = input_tokens
+    run.output_tokens = output_tokens
+    run.completed_at = now()
+    job.status = "succeeded"
+    job.lease_expires_at = None
+    job.error_code = None
+    job.error_message = None
+
+
 def execute_generation(db: Session, settings: Settings, job: CourseGenerationJob) -> None:
     course = db.get(Course, job.course_id)
     if not course or course.workspace_id != job.workspace_id or course.lifecycle_status != "active":
         raise ValueError("generation_canceled")
     role = "course_architect" if job.job_type == "course_outline" else "lesson_writer"
+    lesson = db.get(Lesson, job.lesson_id) if job.lesson_id else None
+    request = CourseAgentRequest(title=course.title, goal=course.goal, audience=course.audience, lesson_title=lesson.title if lesson else None, lesson_objective=lesson.objective if lesson else None, output_language=job.output_language)
+    if role == "lesson_writer":
+        if lesson is None:
+            raise ValueError("lesson_not_found")
+        _execute_lesson_generation(db, settings, job, request)
+        return
     run = AgentRun(course_generation_job_id=job.id, workspace_id=job.workspace_id, role=role, attempt_number=job.attempt_count, status="running")
     db.add(run); db.flush()
-    lesson = db.get(Lesson, job.lesson_id) if job.lesson_id else None
-    request = CourseAgentRequest(title=course.title, goal=course.goal, audience=course.audience, lesson_title=lesson.title if lesson else None, lesson_objective=lesson.objective if lesson else None)
     plan, plan_usage = call_provider(settings, build_search_prompt(role, request))
     maximum_searches = 5 if role == "course_architect" else 3
     queries = plan.get("queries") if isinstance(plan, dict) else None
@@ -186,8 +384,9 @@ def execute_generation(db: Session, settings: Settings, job: CourseGenerationJob
         except (ValidationError, ValueError) as repair_exc:
             _tool_call(db, run, "SubmitCourseOutline" if role == "course_architect" else "SubmitLessonDraft", submit_ordinal, None, None, submit_started, "failed", "invalid_agent_artifact")
             raise ValueError("invalid_agent_artifact") from repair_exc
+    workspace = db.scalar(select(Workspace).where(Workspace.id == job.workspace_id).with_for_update())
     db.refresh(job)
-    if job.status != "running" or (job.lease_expires_at and job.lease_expires_at < now()):
+    if workspace is None or workspace.lifecycle_status != "active" or job.status != "running" or (job.lease_expires_at and job.lease_expires_at < now()):
         raise ValueError("generation_canceled")
     if role == "course_architect":
         persist_outline(db, job, artifact, chunks)

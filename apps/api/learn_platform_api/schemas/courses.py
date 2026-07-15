@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -9,6 +10,7 @@ class CourseCreate(BaseModel):
     audience: str | None = Field(default=None, max_length=500)
     document_ids: list[str] = Field(min_length=1, max_length=20)
     external_processing_ack: bool
+    output_language: Literal["zh-CN", "en"] = "zh-CN"
 
 
 class CourseRead(BaseModel):
@@ -37,6 +39,7 @@ class CourseGenerationJobRead(BaseModel):
     course_version_id: str | None
     lesson_id: str | None
     job_type: str
+    output_language: Literal["zh-CN", "en"]
     status: str
     attempt_count: int
     error_code: str | None
@@ -53,11 +56,13 @@ class CourseCreateRead(BaseModel):
 
 class LessonGenerationCreate(BaseModel):
     external_processing_ack: bool
+    output_language: Literal["zh-CN", "en"] = "zh-CN"
 
 
 class OutlineGenerationCreate(BaseModel):
     document_ids: list[str] = Field(min_length=1, max_length=20)
     external_processing_ack: bool
+    output_language: Literal["zh-CN", "en"] = "zh-CN"
 
 
 class PublishLessonVersion(BaseModel):

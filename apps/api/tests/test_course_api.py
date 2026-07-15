@@ -3,10 +3,10 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from learn_platform_api.db.models import Course, CourseGenerationJob, CourseGenerationJobSource, CourseSection, CourseVersion, DocumentChunk, DocumentVersion, Lesson, LessonVersion, SourceDocument, Workspace
+from learn_platform_api.db.models import Course, CourseGenerationJob, CourseGenerationJobSource, CourseSection, CourseVersion, CourseVersionSource, DocumentChunk, DocumentVersion, Lesson, LessonVersion, SourceDocument, Workspace
 from learn_platform_api.services.course_generation import execute_generation
 from learn_platform_api.settings import get_settings
-from academic_companion.course_agents import CourseOutlineArtifact, LessonDraftArtifact, validate_citations
+from academic_companion.course_agents import CourseAgentRequest, CourseOutlineArtifact, LessonCoverageUnit, LessonDraftArtifact, build_lesson_unit_prompt, validate_citations
 
 
 def _workspace(client: TestClient) -> str:
@@ -41,6 +41,7 @@ def test_create_course_snapshots_ready_sources(client: TestClient, db_session: S
     assert len(body["source_document_version_ids"]) == 1
     assert queued == [body["job"]["id"]]
     assert client.get(f"/api/v1/workspaces/{workspace_id}/courses").json()[0]["id"] == body["course"]["id"]
+    assert client.get(f"/api/v1/workspaces/{workspace_id}/course-generation-jobs").json()[0]["id"] == body["job"]["id"]
     replay = client.post(f"/api/v1/workspaces/{workspace_id}/courses", headers={"Idempotency-Key": "course-create-1"}, json={"title": "Course", "goal": "Learn", "document_ids": [document_id], "external_processing_ack": True})
     assert replay.status_code == 202
     assert replay.json()["course"]["id"] == body["course"]["id"]
@@ -59,6 +60,7 @@ def test_course_endpoints_are_workspace_isolated(client: TestClient, db_session:
 
     assert client.get(f"/api/v1/workspaces/{workspace_b}/courses/{created['course']['id']}").status_code == 404
     assert client.get(f"/api/v1/workspaces/{workspace_b}/course-generation-jobs/{created['job']['id']}").status_code == 404
+    assert client.get(f"/api/v1/workspaces/{workspace_b}/course-generation-jobs").json() == []
     assert client.get(f"/api/v1/workspaces/{workspace_b}/courses").json() == []
 
 
@@ -77,7 +79,7 @@ def test_fake_architect_to_reader_vertical_path(client: TestClient, db_session: 
     workspace_id = _workspace(client)
     document_id = _ready_document(db_session, workspace_id)
     document = db_session.get(SourceDocument, document_id)
-    chunk = DocumentChunk(id="77777777-7777-7777-7777-777777777777", document_version_id=document.current_version_id, ordinal=0, content="Retrieval narrows a large candidate set.", content_hash="7" * 64, start_offset=0, end_offset=40)
+    chunk = DocumentChunk(id="77777777-7777-7777-7777-777777777777", document_version_id=document.current_version_id, ordinal=0, content="Retrieval narrows a large candidate set.", content_hash="7" * 64, start_offset=0, end_offset=40, page_start=2, page_end=3)
     course = Course(workspace_id=workspace_id, title="Search", goal="Understand retrieval")
     db_session.add_all([chunk, course]); db_session.flush()
     job = CourseGenerationJob(workspace_id=workspace_id, course_id=course.id, job_type="course_outline", status="running", idempotency_key="vertical-outline", attempt_count=1)
@@ -100,11 +102,20 @@ def test_fake_architect_to_reader_vertical_path(client: TestClient, db_session: 
     lesson_job = CourseGenerationJob(workspace_id=workspace_id, course_id=course.id, course_version_id=version.id, lesson_id=lesson.id, job_type="lesson_draft", status="running", idempotency_key="vertical-lesson", attempt_count=1)
     db_session.add(lesson_job); db_session.flush()
     db_session.add(CourseGenerationJobSource(course_generation_job_id=lesson_job.id, workspace_id=workspace_id, document_id=document.id, document_version_id=document.current_version_id)); db_session.commit()
+    active_conflict = client.post(
+        f"/api/v1/workspaces/{workspace_id}/courses/{course.id}/versions/{version.id}/lessons/{lesson.id}/generations",
+        headers={"Idempotency-Key": "second-active-lesson"},
+        json={"external_processing_ack": True},
+    )
+    assert active_conflict.status_code == 409
+    assert active_conflict.json()["detail"] == "这个课节已有生成任务正在进行"
     lesson_provider_results = iter([
-        ({"queries": ["why retrieval"]}, {"input_tokens": 2, "output_tokens": 2}),
-        ({"title": "Why retrieval", "learning_objectives": ["Explain narrowing"], "blocks": [{"block_key": "p1", "type": "paragraph", "text": "Retrieval narrows candidates.", "citation_ids": ["e1"]}]}, {"input_tokens": 10, "output_tokens": 20}),
+        ({"learning_objectives": ["Explain narrowing"], "units": [{"unit_key": "core", "title": "Core idea", "objective": "Explain narrowing", "search_query": "why retrieval"}]}, {"input_tokens": 2, "output_tokens": 2}),
+        ({"unit_key": "core", "blocks": [{"block_key": "core-p1", "type": "paragraph", "text": "Retrieval narrows candidates.", "citation_ids": ["e1"]}]}, {"input_tokens": 10, "output_tokens": 20}),
+        ({"complete": True, "revisions": []}, {"input_tokens": 5, "output_tokens": 2}),
     ])
     monkeypatch.setattr(course_generation, "call_provider", lambda *_args: next(lesson_provider_results))
+    monkeypatch.setattr(course_generation, "_lesson_evidence_search", lambda *_args: [chunk])
     execute_generation(db_session, get_settings(), lesson_job); db_session.commit()
     lesson_version = db_session.query(LessonVersion).filter_by(lesson_id=lesson.id).one()
     draft_detail = client.get(f"/api/v1/workspaces/{workspace_id}/courses/{course.id}").json()
@@ -123,7 +134,7 @@ def test_fake_architect_to_reader_vertical_path(client: TestClient, db_session: 
     assert published["status"] == "published"
     assert published["citations"] == [{
         "citation_id": published["citations"][0]["citation_id"],
-        "block_key": "p1",
+        "block_key": "core-p1",
         "document_id": document.id,
         "document_version_id": document.current_version_id,
         "chunk_id": chunk.id,
@@ -131,6 +142,8 @@ def test_fake_architect_to_reader_vertical_path(client: TestClient, db_session: 
         "heading_path": [],
         "start_offset": 0,
         "end_offset": 40,
+        "page_start": 2,
+        "page_end": 3,
         "available": True,
     }]
     summary = client.get(f"/api/v1/workspaces/{workspace_id}/courses").json()[0]
@@ -155,3 +168,55 @@ def test_course_artifacts_reject_budget_and_citation_violations() -> None:
     artifact = LessonDraftArtifact.model_validate({"title": "Lesson", "learning_objectives": ["x"], "blocks": [{"block_key": "p1", "type": "paragraph", "text": "x", "citation_ids": ["e2"]}]})
     with pytest.raises(ValueError, match="unknown_citation"):
         validate_citations(artifact, {"e1"})
+
+
+def test_lesson_prompt_enforces_selected_output_language() -> None:
+    request = CourseAgentRequest(title="Course", goal="Learn", lesson_title="Lesson", lesson_objective="Explain", output_language="en")
+    unit = {"unit_key": "core", "title": "Core", "objective": "Explain", "search_query": "core"}
+
+    prompt = build_lesson_unit_prompt(request, LessonCoverageUnit.model_validate(unit), [{"citation_id": "e1", "text": "证据"}])
+
+    assert "Write all generated titles" in prompt[0]["content"]
+    assert "in English" in prompt[0]["content"]
+
+
+def test_lesson_writer_repairs_coverage_before_atomic_draft(db_session: Session, monkeypatch) -> None:
+    from learn_platform_api.services import course_generation
+
+    workspace = Workspace(name="Coverage workspace", slug="coverage-workspace")
+    db_session.add(workspace); db_session.flush()
+    document = SourceDocument(workspace_id=workspace.id, display_name="coverage.md")
+    db_session.add(document); db_session.flush()
+    document_version = DocumentVersion(document_id=document.id, version_number=1, processing_status="ready", original_filename="coverage.md", mime_type="text/markdown", byte_size=10, sha256="c" * 64, original_storage_uri="test")
+    db_session.add(document_version); db_session.flush(); document.current_version_id = document_version.id
+    chunk = DocumentChunk(id="88888888-8888-8888-8888-888888888888", document_version_id=document_version.id, ordinal=0, content="A complete explanation includes mechanism and example.", content_hash="d" * 64, start_offset=0, end_offset=54)
+    course = Course(workspace_id=workspace.id, title="Coverage", goal="Learn completely")
+    db_session.add_all([chunk, course]); db_session.flush()
+    version = CourseVersion(course_id=course.id, workspace_id=workspace.id, version_number=1, status="draft", title=course.title)
+    db_session.add(version); db_session.flush()
+    db_session.add(CourseVersionSource(course_version_id=version.id, workspace_id=workspace.id, document_id=document.id, document_version_id=document_version.id))
+    section = CourseSection(course_version_id=version.id, workspace_id=workspace.id, ordinal=0, title="Core", objective="Understand")
+    db_session.add(section); db_session.flush()
+    lesson = Lesson(course_version_id=version.id, course_section_id=section.id, workspace_id=workspace.id, ordinal=0, title="Complete lesson", objective="Explain mechanism and example")
+    db_session.add(lesson); db_session.flush()
+    job = CourseGenerationJob(workspace_id=workspace.id, course_id=course.id, course_version_id=version.id, lesson_id=lesson.id, job_type="lesson_draft", status="running", idempotency_key="coverage-repair", attempt_count=1)
+    db_session.add(job); db_session.flush()
+    db_session.add(CourseGenerationJobSource(course_generation_job_id=job.id, workspace_id=workspace.id, document_id=document.id, document_version_id=document_version.id)); db_session.commit()
+
+    results = iter([
+        ({"learning_objectives": ["Explain mechanism and example"], "units": [{"unit_key": "core", "title": "Core", "objective": "Explain", "search_query": "mechanism example"}]}, {"input_tokens": 10, "output_tokens": 10}),
+        ({"unit_key": "wrong", "blocks": [{"block_key": "duplicate", "type": "paragraph", "text": "Unsupported mechanism.", "citation_ids": ["missing"]}]}, {"input_tokens": 10, "output_tokens": 10}),
+        ({"unit_key": "core", "blocks": [{"block_key": "provider-key", "type": "paragraph", "text": "Mechanism.", "citation_ids": ["e1"]}]}, {"input_tokens": 10, "output_tokens": 10}),
+        ({"complete": False, "revisions": [{"unit_key": "core", "instruction": "Add the supported example."}]}, {"input_tokens": 10, "output_tokens": 10}),
+        ({"units": [{"unit_key": "core", "blocks": [{"block_key": "core-p", "type": "paragraph", "text": "Mechanism with a supported example.", "citation_ids": ["e1"]}]}]}, {"input_tokens": 10, "output_tokens": 10}),
+        ({"complete": True, "revisions": []}, {"input_tokens": 10, "output_tokens": 10}),
+    ])
+    monkeypatch.setattr(course_generation, "call_provider", lambda *_args: next(results))
+    monkeypatch.setattr(course_generation, "_lesson_evidence_search", lambda *_args: [chunk])
+
+    execute_generation(db_session, get_settings(), job); db_session.commit()
+
+    draft = db_session.query(LessonVersion).filter_by(lesson_id=lesson.id).one()
+    assert draft.blocks[0]["text"] == "Mechanism with a supported example."
+    assert draft.blocks[0]["block_key"] == "core-p"
+    assert job.status == "succeeded"

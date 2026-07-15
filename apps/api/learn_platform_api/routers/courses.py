@@ -4,8 +4,9 @@ from sqlalchemy.orm import Session
 from learn_platform_api.db.models import Workspace
 from learn_platform_api.db.session import get_db
 from learn_platform_api.schemas.courses import ActivateCourseVersion, CourseCreate, CourseCreateRead, CourseGenerationJobRead, CourseRead, LessonGenerationCreate, OutlineGenerationCreate, PublishLessonVersion
-from learn_platform_api.services.courses import activate_course_version, cancel_job, course_detail, create_course, create_lesson_job, create_outline_job, delete_course, get_course, get_job, list_courses, publish_lesson, reader, retry_generation_job
+from learn_platform_api.services.courses import activate_course_version, cancel_job, course_detail, create_course, create_lesson_job, create_outline_job, delete_course, get_course, get_job, list_courses, list_generation_jobs, publish_lesson, reader, retry_generation_job
 from learn_platform_api.settings import get_settings
+from learn_platform_api.services.workspaces import workspace_is_active
 
 
 router = APIRouter(prefix="/api/v1/workspaces/{workspace_id}", tags=["courses"])
@@ -13,7 +14,7 @@ router = APIRouter(prefix="/api/v1/workspaces/{workspace_id}", tags=["courses"])
 
 @router.get("/courses", response_model=list[CourseRead])
 def list_courses_endpoint(workspace_id: str, db: Session = Depends(get_db)):
-    if not db.get(Workspace, workspace_id):
+    if not workspace_is_active(db, workspace_id):
         raise HTTPException(status_code=404, detail="Workspace 不存在")
     return list_courses(db, workspace_id)
 
@@ -25,7 +26,7 @@ def create_course_endpoint(workspace_id: str, payload: CourseCreate, idempotency
     if not payload.external_processing_ack:
         raise HTTPException(status_code=422, detail="创建课程前必须确认外部处理资料片段")
     try:
-        course, job, source_version_ids = create_course(db, get_settings(), workspace_id, payload.title, payload.goal, payload.audience, payload.document_ids, idempotency_key)
+        course, job, source_version_ids = create_course(db, get_settings(), workspace_id, payload.title, payload.goal, payload.audience, payload.document_ids, payload.output_language, idempotency_key)
     except LookupError:
         raise HTTPException(status_code=404, detail="Workspace 不存在")
     except ValueError as exc:
@@ -48,6 +49,13 @@ def get_course_job_endpoint(workspace_id: str, job_id: str, db: Session = Depend
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     return job
+
+
+@router.get("/course-generation-jobs", response_model=list[CourseGenerationJobRead])
+def list_course_jobs_endpoint(workspace_id: str, db: Session = Depends(get_db)):
+    if not workspace_is_active(db, workspace_id):
+        raise HTTPException(status_code=404, detail="Workspace 不存在")
+    return list_generation_jobs(db, workspace_id)
 
 
 @router.post("/course-generation-jobs/{job_id}/cancel", response_model=CourseGenerationJobRead, status_code=202)
@@ -76,7 +84,7 @@ def create_outline_generation_endpoint(workspace_id: str, course_id: str, payloa
     if not payload.external_processing_ack:
         raise HTTPException(status_code=422, detail="生成大纲前必须确认外部处理资料片段")
     try:
-        return create_outline_job(db, get_settings(), workspace_id, course_id, payload.document_ids, idempotency_key)
+        return create_outline_job(db, get_settings(), workspace_id, course_id, payload.document_ids, payload.output_language, idempotency_key)
     except LookupError:
         raise HTTPException(status_code=404, detail="课程不存在")
     except ValueError as exc:
@@ -90,11 +98,15 @@ def create_lesson_generation_endpoint(workspace_id: str, course_id: str, version
     if not payload.external_processing_ack:
         raise HTTPException(status_code=422, detail="生成课节前必须确认外部处理资料片段")
     try:
-        return create_lesson_job(db, get_settings(), workspace_id, course_id, version_id, lesson_id, idempotency_key)
+        return create_lesson_job(db, get_settings(), workspace_id, course_id, version_id, lesson_id, payload.output_language, idempotency_key)
     except LookupError:
         raise HTTPException(status_code=404, detail="课程版本或课节不存在")
-    except ValueError:
-        raise HTTPException(status_code=409, detail="课程来源已变化，不能继续生成")
+    except ValueError as exc:
+        messages = {
+            "idempotency_key_conflict": "同一 Idempotency-Key 不能用于不同生成请求",
+            "lesson_generation_active": "这个课节已有生成任务正在进行",
+        }
+        raise HTTPException(status_code=409, detail=messages.get(str(exc), "课程来源已变化，不能继续生成"))
 
 
 @router.post("/lessons/{lesson_id}/versions/{lesson_version_id}/publish")

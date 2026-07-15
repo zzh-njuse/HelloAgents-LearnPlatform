@@ -1,6 +1,6 @@
 # Platform Stage 3：章节化学习与 Tutor
 
-状态：Slice 1 已于 2026-07-14 完成实现、独立 OCR、复验和人工浏览器验收。下一步仅准备 Slice 2 的 Tutor Spec/ADR；session 与 memory 的具体边界仍需先经人工 Gate。
+状态：Slice 1、Slice 2 已完成并于 2026-07-15 通过人工 Chrome smoke。下一步先基于 [Slice 3 输入](SLICE_3_INPUTS.md)完成事实盘点和范围 Gate，不自动引入 Stage 4 能力。
 
 ## 目标
 
@@ -14,6 +14,10 @@
 4. [数据库与部署计划](../DATABASE_AND_DEPLOYMENT_PLAN.md)
 5. [Agent 协作开发流程](../AGENT_COLLABORATION_PLAYBOOK.md)
 6. [Slice 1 总结与 Slice 2 输入](SLICE_1_SUMMARY_AND_SLICE_2_INPUTS.md)
+7. [Slice 2 Tutor 事实盘点](SLICE_2_TUTOR_FACT_INVENTORY.md)
+8. [Tutor 名词与成本模型](TUTOR_TERMS_AND_COST_MODEL.md)
+9. [Slice 2 总结](SLICE_2_SUMMARY.md)
+10. [Slice 3 输入](SLICE_3_INPUTS.md)
 
 ## 进入实现前的 Gate
 
@@ -53,7 +57,16 @@
 - [Slice 1 Spec：版本化课程与受控课程生成](specs/001-versioned-course-and-controlled-generation.md)
 - [ADR 001：课程事实、版本、发布与来源生命周期](adr/001-course-authority-versioning-publication-and-source-lifecycle.md)
 - [ADR 002：受控课程 Agent、工具、任务与最小审计轨迹](adr/002-controlled-course-agents-tools-jobs-and-trace.md)
+- [Slice 2 Spec：Course Reader 内的受控 Tutor](specs/002-course-reader-tutor.md)
+- [ADR 003：Tutor Session、上下文快照与删除事实](adr/003-tutor-session-context-and-deletion-authority.md)
+- [ADR 004：受控 Tutor Runtime、队列、流式传输与 Trace](adr/004-controlled-tutor-runtime-queue-streaming-and-trace.md)
+- [Workspace 删除 Spec](specs/003-workspace-deletion.md)
+- [ADR 005：Workspace 删除事实与资源清理顺序](adr/005-workspace-deletion-authority-and-resource-order.md)
+- [Spec 004：独立课程对比与完整课节草稿](specs/004-course-variants-and-comprehensive-lesson-drafts.md)
+- [ADR 006：自适应课节编排与独立预算归属](adr/006-adaptive-lesson-composition-and-budget-ownership.md)
 - [specs/](specs/README.md)：Stage 3 功能规格索引。
 - [adr/](adr/README.md)：Stage 3 跨模块决策索引。
 - [reviews/](reviews/README.md)：记录 Stage 3 的独立审查与人工验收。
 - [Slice 1 总结与 Slice 2 输入](SLICE_1_SUMMARY_AND_SLICE_2_INPUTS.md)：记录已交付合同、验证事实、暂缓风险和 Tutor 规格输入。
+- [Slice 2 总结](SLICE_2_SUMMARY.md)：记录 Tutor、Workspace 删除、课程生成质量修正和人工验收。
+- [Slice 3 输入](SLICE_3_INPUTS.md)：记录下一切片可继承事实、残余风险和必须先确认的范围。

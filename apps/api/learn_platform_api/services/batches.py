@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from learn_platform_api.db.models import DocumentVersion, IngestionBatch, IngestionBatchItem, IngestionJob, Workspace
 from learn_platform_api.services.documents import create_document, retry_job, safe_display_name
 from learn_platform_api.settings import Settings
+from learn_platform_api.services.workspaces import workspace_is_active
 
 
 def _now() -> datetime:
@@ -124,7 +125,7 @@ def create_batch(
     idempotency_key: str,
     files: list[tuple[str, str | None, bytes]],
 ) -> dict[str, object]:
-    if db.get(Workspace, workspace_id) is None:
+    if not workspace_is_active(db, workspace_id):
         raise LookupError("workspace_not_found")
     if not files or len(files) > settings.batch_max_files:
         raise ValueError("batch_file_count_invalid")

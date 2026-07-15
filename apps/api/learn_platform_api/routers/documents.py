@@ -11,6 +11,7 @@ from learn_platform_api.services.answers import answer_question
 from learn_platform_api.services.batches import cancel_batch, create_batch, get_batch, retry_batch
 from learn_platform_api.services.documents import create_document, delete_document, document_course_impact, document_summary, get_document, list_documents, retry_job
 from learn_platform_api.services.retrieval import retrieve
+from learn_platform_api.services.workspaces import workspace_is_active
 from learn_platform_api.settings import get_settings
 
 
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/api/v1/workspaces/{workspace_id}", tags=["documents"
 
 @router.get("/documents", response_model=list[DocumentSummaryRead])
 def list_documents_endpoint(workspace_id: str, db: Session = Depends(get_db)):
-    if db.get(Workspace, workspace_id) is None:
+    if not workspace_is_active(db, workspace_id):
         raise HTTPException(status_code=404, detail="Workspace 不存在")
     return list_documents(db, workspace_id)
 
@@ -33,7 +34,7 @@ async def upload_document_endpoint(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    if db.get(Workspace, workspace_id) is None:
+    if not workspace_is_active(db, workspace_id):
         raise HTTPException(status_code=404, detail="Workspace 不存在")
     content = await file.read(get_settings().document_max_bytes + 1)
     try:
@@ -102,7 +103,7 @@ async def upload_document_batch_endpoint(
     db: Session = Depends(get_db),
 ):
     settings = get_settings()
-    if db.get(Workspace, workspace_id) is None:
+    if not workspace_is_active(db, workspace_id):
         raise HTTPException(status_code=404, detail="Workspace 不存在")
     if not idempotency_key or len(idempotency_key) > 200:
         raise HTTPException(status_code=422, detail="批量上传需要有效的 Idempotency-Key")
@@ -153,7 +154,7 @@ def cancel_document_batch_endpoint(workspace_id: str, batch_id: str, db: Session
 
 @router.post("/rag/query", response_model=RetrievalResponse)
 def query_documents_endpoint(workspace_id: str, payload: RetrievalQuery, db: Session = Depends(get_db)):
-    if db.get(Workspace, workspace_id) is None:
+    if not workspace_is_active(db, workspace_id):
         raise HTTPException(status_code=404, detail="Workspace 不存在")
     try:
         trace_id, results = retrieve(db, get_settings(), workspace_id, payload.query, payload.top_k)
@@ -165,7 +166,7 @@ def query_documents_endpoint(workspace_id: str, payload: RetrievalQuery, db: Ses
 
 @router.post("/rag/answer", response_model=AnswerResponse)
 def answer_documents_endpoint(workspace_id: str, payload: AnswerRequest, db: Session = Depends(get_db)):
-    if db.get(Workspace, workspace_id) is None:
+    if not workspace_is_active(db, workspace_id):
         raise HTTPException(status_code=404, detail="Workspace 不存在")
     try:
         return answer_question(db, get_settings(), workspace_id, payload.question, payload.top_k, payload.document_ids)

@@ -119,6 +119,7 @@ Stage 3 需要在这些资料事实之上增加可长期阅读的课程。如果
 - 章节和课节引用只接受服务端检索阶段签发的临时 evidence ID。
 - 持久化时由服务端将 evidence ID 解析为 Stage 2 的 document/version/chunk/位置元数据；模型不能自行提交可信主键。
 - citation 必须属于当前 workspace 和 Course Version source snapshot。
+- PDF 解析时在 `document_chunks` 保存可空的 1-based `page_start/page_end`，供 Reader 和 Tutor 生成可读页码；Markdown/text 以及迁移前已存在的 chunk 可以为空，内部字符偏移继续作为稳定校验信息但不作为主 UI。
 - 发布和激活时重新校验 citation 可用性；越界、未知或已删除引用导致操作失败。
 - Qdrant 只负责候选召回。最终引用有效性、展示和删除判断全部回到 Postgres。
 

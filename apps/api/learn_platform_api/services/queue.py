@@ -30,3 +30,33 @@ def enqueue_course_generation_job(settings: Settings, job_id: str) -> None:
         )
     finally:
         connection.close()
+
+
+def enqueue_workspace_deletion_job(settings: Settings, job_id: str) -> None:
+    connection = Redis.from_url(settings.redis_url)
+    try:
+        Queue(settings.workspace_deletion_queue_name, connection=connection).enqueue(
+            "learn_platform_api.workspace_workers.run_workspace_deletion_job", job_id
+        )
+    finally:
+        connection.close()
+
+
+def enqueue_tutor_turn(settings: Settings, turn_id: str) -> None:
+    connection = Redis.from_url(settings.redis_url)
+    try:
+        Queue(settings.tutor_queue_name, connection=connection).enqueue(
+            "learn_platform_api.tutor_workers.run_tutor_turn", turn_id
+        )
+    finally:
+        connection.close()
+
+
+def enqueue_tutor_session_deletion(settings: Settings, session_id: str) -> None:
+    connection = Redis.from_url(settings.redis_url)
+    try:
+        Queue(settings.tutor_queue_name, connection=connection).enqueue(
+            "learn_platform_api.tutor_workers.cleanup_tutor_session", session_id
+        )
+    finally:
+        connection.close()

@@ -34,3 +34,28 @@ class WorkspaceRead(BaseModel):
     description: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class WorkspaceDeletionCreate(BaseModel):
+    confirmation_name: str = Field(min_length=1, max_length=120)
+
+
+class WorkspaceDeletionImpact(BaseModel):
+    document_count: int
+    course_count: int
+    active_job_count: int
+    tutor_session_count: int = 0
+
+
+class WorkspaceDeletionJobRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    workspace_id: str
+    status: str
+    attempt_count: int
+    error_code: str | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None

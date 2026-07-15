@@ -15,7 +15,7 @@ def slugify(value: str) -> str:
 
 def list_workspaces(db: Session, skip: int = 0, limit: int = 100) -> list[Workspace]:
     statement = (
-        select(Workspace)
+        select(Workspace).where(Workspace.lifecycle_status == "active")
         .order_by(Workspace.created_at.desc())
         .offset(skip)
         .limit(limit)
@@ -24,7 +24,11 @@ def list_workspaces(db: Session, skip: int = 0, limit: int = 100) -> list[Worksp
 
 
 def get_workspace(db: Session, workspace_id: str) -> Workspace | None:
-    return db.get(Workspace, workspace_id)
+    return db.scalar(select(Workspace).where(Workspace.id == workspace_id, Workspace.lifecycle_status == "active"))
+
+
+def workspace_is_active(db: Session, workspace_id: str) -> bool:
+    return db.scalar(select(Workspace.id).where(Workspace.id == workspace_id, Workspace.lifecycle_status == "active")) is not None
 
 
 def create_workspace(db: Session, payload: WorkspaceCreate) -> Workspace:

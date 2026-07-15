@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
 from learn_platform_api.db.base import Base
-from learn_platform_api.db.models import DocumentChunk, DocumentParseReport, DocumentVersion, IngestionJob, RagAnswerTrace, RagQueryTrace, SourceDocument, Workspace
+from learn_platform_api.db.models import CourseGenerationJob, DocumentChunk, DocumentParseReport, DocumentVersion, IngestionJob, RagAnswerTrace, RagQueryTrace, SourceDocument, Workspace
 from learn_platform_api.schemas.documents import CitationRead, RetrievalResult
 from learn_platform_api.services.retrieval import retrieve
 from learn_platform_api.services.jobs import reconcile_jobs
@@ -19,7 +19,7 @@ from learn_platform_api.maintenance import rebuild_index
 from learn_platform_api.services.documents import safe_display_name
 from learn_platform_api.services.storage import remove_tree, write_original
 from learn_platform_api.settings import get_settings
-from learn_platform_api.workers import claim_job, chunk_text, heading_path_at, heartbeat_job, normalize_text, parse_document, run_cleanup_job, run_ingestion_job
+from learn_platform_api.workers import claim_job, chunk_text, heading_path_at, heartbeat_job, normalize_text, pages_for_chunk, parse_document, parse_document_with_page_spans, run_cleanup_job, run_ingestion_job
 
 
 def create_workspace(client: TestClient) -> str:
@@ -290,6 +290,27 @@ def test_text_pdf_is_parsed_with_page_count() -> None:
     assert warnings == []
 
 
+def test_pdf_page_spans_map_chunks_to_source_pages() -> None:
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer)
+    pdf.drawString(72, 720, "First page learning content")
+    pdf.showPage()
+    pdf.drawString(72, 720, "Second page retrieval content")
+    pdf.save()
+
+    text, parser_key, page_count, warnings, page_spans = parse_document_with_page_spans(
+        "notes.pdf",
+        buffer.getvalue(),
+        get_settings().model_copy(update={"parser_timeout_seconds": 20}),
+    )
+
+    assert parser_key == "pypdf"
+    assert page_count == 2
+    assert warnings == []
+    assert pages_for_chunk(text.index("First"), text.index("First") + 5, page_spans) == (1, 1)
+    assert pages_for_chunk(text.index("First"), len(text), page_spans) == (1, 2)
+
+
 def test_encrypted_pdf_has_stable_error() -> None:
     buffer = BytesIO()
     writer = PdfWriter()
@@ -423,6 +444,27 @@ def test_reconcile_requeues_expired_lease(db_session: Session, monkeypatch) -> N
     assert count == 1
     assert job.status == "queued"
     assert queued == [job.id]
+
+
+def test_reconcile_terminalizes_requested_course_cancellation(db_session: Session) -> None:
+    job = CourseGenerationJob(
+        workspace_id="workspace",
+        course_id="course",
+        job_type="lesson_draft",
+        status="cancel_requested",
+        idempotency_key="cancel-course:test:1",
+        worker_id="worker",
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    count = reconcile_jobs(db_session, get_settings())
+
+    db_session.refresh(job)
+    assert count == 1
+    assert job.status == "canceled"
+    assert job.error_code == "generation_canceled"
+    assert job.worker_id is None
 
 
 def test_job_claim_is_idempotent(db_session: Session) -> None:

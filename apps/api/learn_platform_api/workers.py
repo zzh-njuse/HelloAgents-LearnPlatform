@@ -42,7 +42,7 @@ def normalize_text(text: str) -> str:
     return "\n".join(line.rstrip() for line in normalized.split("\n")).strip()
 
 
-def _parse_pdf_content(content: bytes, max_pages: int, max_chars: int) -> tuple[str, str, int, list[str]]:
+def _parse_pdf_content(content: bytes, max_pages: int, max_chars: int) -> tuple[str, str, int, list[str], list[tuple[int, int, int]]]:
     try:
         reader = PdfReader(io.BytesIO(content))
         if reader.is_encrypted and not reader.decrypt(""):
@@ -66,13 +66,25 @@ def _parse_pdf_content(content: bytes, max_pages: int, max_chars: int) -> tuple[
         raise
     except Exception as exc:
         raise ValueError("pdf_parse_failed") from exc
-    text = normalize_text("\n\n".join(page_texts))
+    normalized_pages = [normalize_text(value) for value in page_texts]
+    text_parts: list[str] = []
+    page_spans: list[tuple[int, int, int]] = []
+    offset = 0
+    for page_number, page_text in enumerate(normalized_pages, 1):
+        if text_parts:
+            text_parts.append("\n\n")
+            offset += 2
+        start = offset
+        text_parts.append(page_text)
+        offset += len(page_text)
+        page_spans.append((page_number, start, offset))
+    text = "".join(text_parts)
     if len(text) > max_chars:
         raise ValueError("parsed_text_limit_exceeded")
     if len(text) < 10:
         raise ValueError("ocr_required")
     warnings = ["empty_pdf_pages"] if any(not value.strip() for value in page_texts) else []
-    return text, "pypdf", page_count, warnings
+    return text, "pypdf", page_count, warnings, page_spans
 
 
 def _parse_pdf_worker(content: bytes, max_pages: int, max_chars: int, queue) -> None:
@@ -84,7 +96,7 @@ def _parse_pdf_worker(content: bytes, max_pages: int, max_chars: int, queue) -> 
         queue.put(("error", "parser_process_failed"))
 
 
-def _parse_pdf_isolated(content: bytes, max_pages: int, max_chars: int, timeout_seconds: int) -> tuple[str, str, int, list[str]]:
+def _parse_pdf_isolated(content: bytes, max_pages: int, max_chars: int, timeout_seconds: int) -> tuple[str, str, int, list[str], list[tuple[int, int, int]]]:
     context = multiprocessing.get_context("spawn")
     queue = context.Queue(maxsize=1)
     process = context.Process(target=_parse_pdf_worker, args=(content, max_pages, max_chars, queue))
@@ -113,12 +125,17 @@ def _parse_pdf_isolated(content: bytes, max_pages: int, max_chars: int, timeout_
 
 
 def parse_document(filename: str, content: bytes, settings=None) -> tuple[str, str, int | None, list[str]]:
+    parsed, parser_key, page_count, warnings, _ = parse_document_with_page_spans(filename, content, settings)
+    return parsed, parser_key, page_count, warnings
+
+
+def parse_document_with_page_spans(filename: str, content: bytes, settings=None) -> tuple[str, str, int | None, list[str], list[tuple[int, int, int]]]:
     suffix = filename.rsplit(".", 1)[-1].lower()
     if suffix in {"md", "txt"}:
         text = normalize_text(content.decode("utf-8-sig"))
         if settings and len(text) > settings.parsed_text_max_chars:
             raise ValueError("parsed_text_limit_exceeded")
-        return text, "text", None, []
+        return text, "text", None, [], []
     if suffix == "pdf":
         max_pages = settings.pdf_max_pages if settings else 1_000_000
         max_chars = settings.parsed_text_max_chars if settings else 10_000_000
@@ -126,6 +143,11 @@ def parse_document(filename: str, content: bytes, settings=None) -> tuple[str, s
             return _parse_pdf_isolated(content, max_pages, max_chars, settings.parser_timeout_seconds)
         return _parse_pdf_content(content, max_pages, max_chars)
     raise ValueError("unsupported_type")
+
+
+def pages_for_chunk(start: int, end: int, page_spans: list[tuple[int, int, int]]) -> tuple[int | None, int | None]:
+    pages = [page for page, page_start, page_end in page_spans if page_end > start and page_start < end]
+    return (min(pages), max(pages)) if pages else (None, None)
 
 
 def chunk_text(text: str, size: int = 800, overlap: int = 100, max_chunks: int | None = None) -> list[tuple[str, int, int]]:
@@ -319,7 +341,7 @@ def claim_job(db, job_id: str, worker_id: str, settings) -> IngestionJob | None:
     if current is None:
         return None
     workspace = db.scalar(select(Workspace).where(Workspace.id == current.workspace_id).with_for_update())
-    if workspace is None:
+    if workspace is None or workspace.lifecycle_status != "active":
         return None
     active = db.scalar(
         select(func.count()).select_from(IngestionJob).where(
@@ -392,7 +414,7 @@ def run_ingestion_job(job_id: str) -> None:
             phase = "read_storage"
             content = read_bytes(settings.storage_root, version.original_storage_uri)
             phase = "parse"
-            parsed, parser_key, page_count, warning_codes = parse_document(version.original_filename, content, settings)
+            parsed, parser_key, page_count, warning_codes, page_spans = parse_document_with_page_spans(version.original_filename, content, settings)
             ensure_job_owned(db, job, worker_id, lease_lost)
             if is_batch_cancel_requested(db, job.id):
                 raise RuntimeError("batch_cancel_requested")
@@ -413,6 +435,9 @@ def run_ingestion_job(job_id: str) -> None:
             ensure_job_owned(db, job, worker_id, lease_lost)
             if is_batch_cancel_requested(db, job.id):
                 raise RuntimeError("batch_cancel_requested")
+            workspace = db.scalar(select(Workspace).where(Workspace.id == job.workspace_id).with_for_update())
+            if workspace is None or workspace.lifecycle_status != "active":
+                raise RuntimeError("workspace_deleting")
             # Serialize final indexing with deletion. If delete owns this row first,
             # this worker observes the deleted lifecycle and never writes Qdrant.
             document = db.scalar(
@@ -428,7 +453,8 @@ def run_ingestion_job(job_id: str) -> None:
             rows = []
             for ordinal, ((item, start, end), heading_path) in enumerate(zip(chunks, chunk_headings)):
                 content_hash = hashlib.sha256(item.encode()).hexdigest()
-                rows.append(DocumentChunk(id=str(uuid5(NAMESPACE_URL, f"{version.id}:{ordinal}:{content_hash}")), document_version_id=version.id, ordinal=ordinal, content=item, content_hash=content_hash, heading_path=heading_path, start_offset=start, end_offset=end))
+                page_start, page_end = pages_for_chunk(start, end, page_spans)
+                rows.append(DocumentChunk(id=str(uuid5(NAMESPACE_URL, f"{version.id}:{ordinal}:{content_hash}")), document_version_id=version.id, ordinal=ordinal, content=item, content_hash=content_hash, heading_path=heading_path, start_offset=start, end_offset=end, page_start=page_start, page_end=page_end))
             db.add_all(rows)
             db.flush()
             phase = "index"

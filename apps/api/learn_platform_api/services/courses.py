@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from learn_platform_api.db.models import Course, CourseGenerationJob, CourseGenerationJobSource, CourseSection, CourseVersion, CourseVersionSource, DocumentChunk, DocumentVersion, Lesson, LessonCitation, LessonVersion, SourceDocument, Workspace
 from learn_platform_api.services.queue import enqueue_course_generation_job
 from learn_platform_api.settings import Settings
+from learn_platform_api.services.workspaces import workspace_is_active
 
 
 def _sources(db: Session, workspace_id: str, document_ids: list[str]) -> list[tuple[SourceDocument, DocumentVersion]]:
@@ -23,27 +24,27 @@ def _read(course: Course) -> dict[str, object]:
     return {"id": course.id, "workspace_id": course.workspace_id, "title": course.title, "goal": course.goal, "audience": course.audience, "lifecycle_status": course.lifecycle_status, "current_active_version_id": course.current_active_version_id, "created_at": course.created_at, "updated_at": course.updated_at, "source_degraded": False}
 
 
-def create_course(db: Session, settings: Settings, workspace_id: str, title: str, goal: str, audience: str | None, document_ids: list[str], idempotency_key: str) -> tuple[dict[str, object], CourseGenerationJob, list[str]]:
-    if not db.get(Workspace, workspace_id):
+def create_course(db: Session, settings: Settings, workspace_id: str, title: str, goal: str, audience: str | None, document_ids: list[str], output_language: str, idempotency_key: str) -> tuple[dict[str, object], CourseGenerationJob, list[str]]:
+    if not workspace_is_active(db, workspace_id):
         raise LookupError("workspace_not_found")
     existing = db.scalar(select(CourseGenerationJob).where(CourseGenerationJob.workspace_id == workspace_id, CourseGenerationJob.idempotency_key == idempotency_key))
     if existing:
         course = db.get(Course, existing.course_id)
         existing_sources = list(db.scalars(select(CourseGenerationJobSource).where(CourseGenerationJobSource.course_generation_job_id == existing.id)))
-        if not course or course.title != title or course.goal != goal or course.audience != audience or {row.document_id for row in existing_sources} != set(document_ids):
+        if not course or course.title != title or course.goal != goal or course.audience != audience or existing.output_language != output_language or {row.document_id for row in existing_sources} != set(document_ids):
             raise ValueError("idempotency_key_conflict")
         return _read(course), existing, [row.document_version_id for row in existing_sources]
     rows = _sources(db, workspace_id, document_ids)
     try:
         course = Course(workspace_id=workspace_id, title=title, goal=goal, audience=audience)
         db.add(course); db.flush()
-        job = CourseGenerationJob(workspace_id=workspace_id, course_id=course.id, job_type="course_outline", status="queued", idempotency_key=idempotency_key)
+        job = CourseGenerationJob(workspace_id=workspace_id, course_id=course.id, job_type="course_outline", output_language=output_language, status="queued", idempotency_key=idempotency_key)
         db.add(job); db.flush()
         db.add_all(CourseGenerationJobSource(course_generation_job_id=job.id, workspace_id=workspace_id, document_id=document.id, document_version_id=version.id) for document, version in rows)
         db.commit(); db.refresh(course); db.refresh(job)
     except IntegrityError:
         db.rollback()
-        return create_course(db, settings, workspace_id, title, goal, audience, document_ids, idempotency_key)
+        return create_course(db, settings, workspace_id, title, goal, audience, document_ids, output_language, idempotency_key)
     try:
         enqueue_course_generation_job(settings, job.id)
     except Exception:
@@ -104,7 +105,16 @@ def get_job(db: Session, workspace_id: str, job_id: str) -> CourseGenerationJob 
     return db.scalar(select(CourseGenerationJob).where(CourseGenerationJob.id == job_id, CourseGenerationJob.workspace_id == workspace_id))
 
 
-def create_lesson_job(db: Session, settings: Settings, workspace_id: str, course_id: str, version_id: str, lesson_id: str, idempotency_key: str) -> CourseGenerationJob:
+def list_generation_jobs(db: Session, workspace_id: str, limit: int = 20) -> list[CourseGenerationJob]:
+    return list(db.scalars(
+        select(CourseGenerationJob)
+        .where(CourseGenerationJob.workspace_id == workspace_id)
+        .order_by(CourseGenerationJob.created_at.desc())
+        .limit(min(max(limit, 1), 50))
+    ))
+
+
+def create_lesson_job(db: Session, settings: Settings, workspace_id: str, course_id: str, version_id: str, lesson_id: str, output_language: str, idempotency_key: str) -> CourseGenerationJob:
     course = get_course(db, workspace_id, course_id)
     version = db.scalar(select(CourseVersion).where(CourseVersion.id == version_id, CourseVersion.course_id == course_id, CourseVersion.workspace_id == workspace_id))
     lesson = db.scalar(select(Lesson).where(Lesson.id == lesson_id, Lesson.course_version_id == version_id, Lesson.workspace_id == workspace_id))
@@ -114,18 +124,26 @@ def create_lesson_job(db: Session, settings: Settings, workspace_id: str, course
         raise ValueError("source_snapshot_stale")
     existing = db.scalar(select(CourseGenerationJob).where(CourseGenerationJob.workspace_id == workspace_id, CourseGenerationJob.idempotency_key == idempotency_key))
     if existing:
-        if existing.course_id != course_id or existing.course_version_id != version_id or existing.lesson_id != lesson_id or existing.job_type != "lesson_draft":
+        if existing.course_id != course_id or existing.course_version_id != version_id or existing.lesson_id != lesson_id or existing.job_type != "lesson_draft" or existing.output_language != output_language:
             raise ValueError("idempotency_key_conflict")
         return existing
+    active = db.scalar(select(CourseGenerationJob.id).where(
+        CourseGenerationJob.workspace_id == workspace_id,
+        CourseGenerationJob.lesson_id == lesson_id,
+        CourseGenerationJob.job_type == "lesson_draft",
+        CourseGenerationJob.status.in_({"queued", "running", "retry_wait", "cancel_requested"}),
+    ).limit(1))
+    if active:
+        raise ValueError("lesson_generation_active")
     try:
-        job = CourseGenerationJob(workspace_id=workspace_id, course_id=course_id, course_version_id=version_id, lesson_id=lesson_id, job_type="lesson_draft", status="queued", idempotency_key=idempotency_key)
+        job = CourseGenerationJob(workspace_id=workspace_id, course_id=course_id, course_version_id=version_id, lesson_id=lesson_id, job_type="lesson_draft", output_language=output_language, status="queued", idempotency_key=idempotency_key)
         db.add(job); db.flush()
         for source in db.scalars(select(CourseVersionSource).where(CourseVersionSource.course_version_id == version_id)):
             db.add(CourseGenerationJobSource(course_generation_job_id=job.id, workspace_id=workspace_id, document_id=source.document_id, document_version_id=source.document_version_id))
         db.commit(); db.refresh(job)
     except IntegrityError:
         db.rollback()
-        return create_lesson_job(db, settings, workspace_id, course_id, version_id, lesson_id, idempotency_key)
+        return create_lesson_job(db, settings, workspace_id, course_id, version_id, lesson_id, output_language, idempotency_key)
     try:
         enqueue_course_generation_job(settings, job.id)
     except Exception:
@@ -133,7 +151,7 @@ def create_lesson_job(db: Session, settings: Settings, workspace_id: str, course
     return job
 
 
-def create_outline_job(db: Session, settings: Settings, workspace_id: str, course_id: str, document_ids: list[str], idempotency_key: str) -> CourseGenerationJob:
+def create_outline_job(db: Session, settings: Settings, workspace_id: str, course_id: str, document_ids: list[str], output_language: str, idempotency_key: str) -> CourseGenerationJob:
     course = get_course(db, workspace_id, course_id)
     if not course:
         raise LookupError("course_not_found")
@@ -141,17 +159,17 @@ def create_outline_job(db: Session, settings: Settings, workspace_id: str, cours
     existing = db.scalar(select(CourseGenerationJob).where(CourseGenerationJob.workspace_id == workspace_id, CourseGenerationJob.idempotency_key == idempotency_key))
     if existing:
         existing_sources = set(db.scalars(select(CourseGenerationJobSource.document_id).where(CourseGenerationJobSource.course_generation_job_id == existing.id)))
-        if existing.course_id != course_id or existing.job_type != "course_outline" or existing_sources != set(document_ids):
+        if existing.course_id != course_id or existing.job_type != "course_outline" or existing.output_language != output_language or existing_sources != set(document_ids):
             raise ValueError("idempotency_key_conflict")
         return existing
     try:
-        job = CourseGenerationJob(workspace_id=workspace_id, course_id=course_id, job_type="course_outline", status="queued", idempotency_key=idempotency_key)
+        job = CourseGenerationJob(workspace_id=workspace_id, course_id=course_id, job_type="course_outline", output_language=output_language, status="queued", idempotency_key=idempotency_key)
         db.add(job); db.flush()
         db.add_all(CourseGenerationJobSource(course_generation_job_id=job.id, workspace_id=workspace_id, document_id=document.id, document_version_id=version.id) for document, version in rows)
         db.commit(); db.refresh(job)
     except IntegrityError:
         db.rollback()
-        return create_outline_job(db, settings, workspace_id, course_id, document_ids, idempotency_key)
+        return create_outline_job(db, settings, workspace_id, course_id, document_ids, output_language, idempotency_key)
     try:
         enqueue_course_generation_job(settings, job.id)
     except Exception:
@@ -224,7 +242,7 @@ def course_detail(db: Session, course: Course) -> dict[str, object]:
                 version_reads = []
                 for draft in drafts:
                     citation_rows = list(db.execute(select(LessonCitation, DocumentChunk, SourceDocument).join(DocumentChunk, LessonCitation.document_chunk_id == DocumentChunk.id).join(SourceDocument, LessonCitation.document_id == SourceDocument.id).where(LessonCitation.lesson_version_id == draft.id)).all())
-                    citations = [{"citation_id": citation.id, "block_key": citation.block_key, "document_id": citation.document_id, "document_version_id": citation.document_version_id, "chunk_id": citation.document_chunk_id, "document_name": document.display_name, "heading_path": chunk.heading_path.split(" / ") if chunk.heading_path else [], "start_offset": chunk.start_offset, "end_offset": chunk.end_offset, "available": document.lifecycle_status == "active" and document.current_version_id == citation.document_version_id} for citation, chunk, document in citation_rows]
+                    citations = [{"citation_id": citation.id, "block_key": citation.block_key, "document_id": citation.document_id, "document_version_id": citation.document_version_id, "chunk_id": citation.document_chunk_id, "document_name": document.display_name, "heading_path": chunk.heading_path.split(" / ") if chunk.heading_path else [], "start_offset": chunk.start_offset, "end_offset": chunk.end_offset, "page_start": chunk.page_start, "page_end": chunk.page_end, "available": document.lifecycle_status == "active" and document.current_version_id == citation.document_version_id} for citation, chunk, document in citation_rows]
                     by_block: dict[str, list[str]] = {}
                     for citation in citations:
                         by_block.setdefault(citation["block_key"], []).append(citation["citation_id"])

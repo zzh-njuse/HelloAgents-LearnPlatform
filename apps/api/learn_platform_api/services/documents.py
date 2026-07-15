@@ -9,6 +9,7 @@ from learn_platform_api.db.models import Course, CourseVersion, CourseVersionSou
 from learn_platform_api.services.queue import enqueue_ingestion_job
 from learn_platform_api.services.storage import remove_file, safe_extension, write_original
 from learn_platform_api.settings import Settings
+from learn_platform_api.services.workspaces import workspace_is_active
 
 
 CONTENT_TYPES = {
@@ -89,7 +90,7 @@ def document_course_impact(db: Session, workspace_id: str, document_id: str) -> 
 def create_document(
     db: Session, settings: Settings, workspace_id: str, filename: str, content_type: str | None, content: bytes
 ) -> tuple[SourceDocument, DocumentVersion, IngestionJob]:
-    if db.get(Workspace, workspace_id) is None:
+    if not workspace_is_active(db, workspace_id):
         raise LookupError("workspace_not_found")
     extension = safe_extension(filename)
     if not extension or content_type not in {None, CONTENT_TYPES[extension], "application/octet-stream"}:

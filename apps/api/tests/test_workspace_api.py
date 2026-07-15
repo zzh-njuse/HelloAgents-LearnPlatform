@@ -1,7 +1,11 @@
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from learn_platform_api.main import create_app
+from learn_platform_api.db.models import DocumentChunk, DocumentVersion, IngestionJob, SourceDocument, Workspace, WorkspaceDeletionJob
+from learn_platform_api.services.workspace_deletion import execute_deletion
+from learn_platform_api.settings import get_settings
 
 
 def test_health_and_request_id(client: TestClient) -> None:
@@ -78,3 +82,82 @@ def test_list_pagination_is_bounded(client: TestClient) -> None:
     response = client.get("/api/v1/workspaces?limit=201")
 
     assert response.status_code == 422
+
+
+def test_workspace_deletion_requires_name_and_hides_workspace(client: TestClient, db_session: Session, monkeypatch) -> None:
+    from learn_platform_api.services import workspace_deletion
+
+    queued: list[str] = []
+    monkeypatch.setattr(workspace_deletion, "enqueue_workspace_deletion_job", lambda _settings, job_id: queued.append(job_id))
+    workspace = client.post("/api/v1/workspaces", json={"name": "Delete me"}).json()
+
+    impact = client.get(f"/api/v1/workspaces/{workspace['id']}/deletion-impact")
+    mismatch = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/deletion",
+        headers={"Idempotency-Key": "delete-1"},
+        json={"confirmation_name": "wrong"},
+    )
+    deleted = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/deletion",
+        headers={"Idempotency-Key": "delete-1"},
+        json={"confirmation_name": "Delete me"},
+    )
+
+    assert impact.json() == {"document_count": 0, "course_count": 0, "active_job_count": 0, "tutor_session_count": 0}
+    assert mismatch.status_code == 422
+    assert deleted.status_code == 202
+    assert queued == [deleted.json()["id"]]
+    assert client.get("/api/v1/workspaces").json() == []
+    assert client.get(f"/api/v1/workspaces/{workspace['id']}").status_code == 404
+    assert db_session.get(Workspace, workspace["id"]).lifecycle_status == "deleting"
+
+
+def test_workspace_deletion_enqueue_failure_is_retryable(client: TestClient, db_session: Session, monkeypatch) -> None:
+    from learn_platform_api.services import workspace_deletion
+
+    def fail_enqueue(*_args) -> None:
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(workspace_deletion, "enqueue_workspace_deletion_job", fail_enqueue)
+    workspace = client.post("/api/v1/workspaces", json={"name": "Queue failure"}).json()
+    response = client.post(
+        f"/api/v1/workspaces/{workspace['id']}/deletion",
+        headers={"Idempotency-Key": "delete-queue-failure"},
+        json={"confirmation_name": "Queue failure"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "queue_failed"
+    job = db_session.get(WorkspaceDeletionJob, response.json()["id"])
+    assert job.error_code == "queue_unavailable"
+
+
+def test_workspace_deletion_removes_database_storage_and_index_rows(client: TestClient, db_session: Session, monkeypatch, tmp_path) -> None:
+    from learn_platform_api.services import workspace_deletion
+
+    monkeypatch.setattr(workspace_deletion, "enqueue_workspace_deletion_job", lambda *_: None)
+    removed_qdrant: list[str] = []
+    removed_storage: list[str] = []
+    monkeypatch.setattr(workspace_deletion, "_delete_qdrant", lambda _settings, workspace_id: removed_qdrant.append(workspace_id))
+    monkeypatch.setattr(workspace_deletion, "remove_tree", lambda _root, uri: removed_storage.append(uri))
+    workspace = client.post("/api/v1/workspaces", json={"name": "Populated"}).json()
+    document = SourceDocument(workspace_id=workspace["id"], display_name="notes.md")
+    db_session.add(document); db_session.flush()
+    version = DocumentVersion(document_id=document.id, version_number=1, processing_status="ready", original_filename="notes.md", mime_type="text/markdown", byte_size=4, sha256="0" * 64, original_storage_uri="stored")
+    db_session.add(version); db_session.flush()
+    document.current_version_id = version.id
+    chunk = DocumentChunk(id="00000000-0000-0000-0000-000000000123", document_version_id=version.id, ordinal=0, content="text", content_hash="1" * 64, start_offset=0, end_offset=4)
+    ingestion = IngestionJob(workspace_id=workspace["id"], document_version_id=version.id, job_type="ingest_document", status="failed", idempotency_key="ingest")
+    db_session.add_all([chunk, ingestion]); db_session.commit()
+    response = client.post(f"/api/v1/workspaces/{workspace['id']}/deletion", headers={"Idempotency-Key": "delete-populated"}, json={"confirmation_name": "Populated"})
+    job = db_session.get(WorkspaceDeletionJob, response.json()["id"])
+
+    execute_deletion(db_session, get_settings().model_copy(update={"storage_root": tmp_path}), job)
+    db_session.commit()
+
+    assert db_session.get(Workspace, workspace["id"]) is None
+    assert db_session.get(SourceDocument, document.id) is None
+    assert db_session.get(DocumentVersion, version.id) is None
+    assert db_session.get(WorkspaceDeletionJob, job.id).status == "succeeded"
+    assert removed_qdrant == [workspace["id"]]
+    assert removed_storage == [f"workspaces/{workspace['id']}"]
