@@ -1,3 +1,3 @@
-from . import courses, documents, health, system, workspaces
+from . import agent_runs, courses, documents, health, system, workspaces
 
-__all__ = ["courses", "documents", "health", "system", "workspaces"]
+__all__ = ["agent_runs", "courses", "documents", "health", "system", "workspaces"]

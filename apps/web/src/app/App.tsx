@@ -51,6 +51,9 @@ import {
   WorkspaceDeletionJob
 } from "../lib/api";
 import { CoursePanel } from "./CoursePanel";
+import { AgentRunsPanel } from "./AgentRunsPanel";
+
+type ViewMode = "learn" | "runs";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 
@@ -66,6 +69,7 @@ const emptyReadiness: Readiness = {
 
 export function App() {
   const [readiness, setReadiness] = useState<Readiness>(emptyReadiness);
+  const [viewMode, setViewMode] = useState<ViewMode>("learn");
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -519,6 +523,23 @@ export function App() {
           <StatusItem icon={<HardDrive />} label="Storage" {...readiness.checks.storage} />
         </section>
 
+        {selectedWorkspace ? (
+          <div className="view-switch" role="tablist" aria-label="Workspace 视图">
+            <button className={viewMode === "learn" ? "active" : ""} onClick={() => setViewMode("learn")} role="tab" type="button">
+              <BookOpenCheck size={16} /><span>学习</span>
+            </button>
+            <button className={viewMode === "runs" ? "active" : ""} onClick={() => setViewMode("runs")} role="tab" type="button">
+              <Activity size={16} /><span>运行记录</span>
+            </button>
+          </div>
+        ) : null}
+
+        {selectedWorkspace && viewMode === "runs" ? (
+          <AgentRunsPanel key={selectedWorkspace.id} workspaceId={selectedWorkspace.id} />
+        ) : null}
+
+        {(!selectedWorkspace || viewMode === "learn") ? (
+        <>
         <div className="workspace-grid">
           <section className="workspace-section" aria-labelledby="workspace-title">
             <div className="section-heading">
@@ -654,6 +675,8 @@ export function App() {
           </section>
         </div>
         {selectedWorkspace ? <CoursePanel documents={documents} workspaceId={selectedWorkspace.id} /> : null}
+        </>
+        ) : null}
       </main>
       {deleteTarget ? (
         <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target && deleteState !== "loading") setDeleteTarget(null); }}>

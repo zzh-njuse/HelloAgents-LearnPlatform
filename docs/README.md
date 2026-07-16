@@ -22,7 +22,8 @@
 - [Platform Stage 1：Self-Host 平台壳](./01-platform-stage-1-self-host-shell/README.md)
 - [Platform Stage 2：资料生命周期与引用检索](./02-platform-stage-2-material-lifecycle-and-citation-retrieval/README.md)
 - [Stage 2 总结与 Stage 3 输入](./02-platform-stage-2-material-lifecycle-and-citation-retrieval/STAGE_2_SUMMARY_AND_STAGE_3_INPUTS.md)
-- [Platform Stage 3：章节化学习与 Tutor（Slice 1/2 已完成）](./03-platform-stage-3-chapter-learning-and-tutor/README.md)
+- [Platform Stage 3：章节化学习与 Tutor（已完成）](./03-platform-stage-3-chapter-learning-and-tutor/README.md)
+- [Platform Stage 4：练习、记忆与复习闭环（事实输入与 Spec/ADR 准备）](./04-platform-stage-4-practice-memory-and-review/README.md)
 
 ## Framework 指南
 

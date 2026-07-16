@@ -1,6 +1,6 @@
 # Stage 3 ADRs
 
-状态：ADR 001-006 已通过人工 Gate并在 Slice 1/2 生效；Slice 3 尚未形成 ADR。
+状态：ADR 001-007 已通过人工 Gate；ADR 007 自 2026-07-16 起对 Slice 3 生效。
 
 ## 当前文档
 
@@ -10,5 +10,6 @@
 - [ADR 004：受控 Tutor Runtime、队列、流式传输与 Trace](004-controlled-tutor-runtime-queue-streaming-and-trace.md)
 - [ADR 005：Workspace 删除事实与资源清理顺序](005-workspace-deletion-authority-and-resource-order.md)
 - [ADR 006：自适应课节编排与独立预算归属](006-adaptive-lesson-composition-and-budget-ownership.md)
+- [ADR 007：Eval 产物与安全运行视图的归属](007-eval-artifacts-and-safe-trace-projection.md)：已于 2026-07-16 接受并生效。
 
 长期 Memory、Skill、MCP 和自主多 Agent 不由这些 ADR 提前决定。

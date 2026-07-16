@@ -15,7 +15,7 @@
 
 ## 2. 当前状态
 
-当前状态：**Platform Stage 2 已完成；Platform Stage 3 Slice 1/2 的版本化课程、受控生成、Course Reader、Tutor 和 Workspace 删除已完成，下一步分析 Slice 3 是否作为 Stage 3 质量与交付收尾**。
+当前状态：**Platform Stage 3 已完成；版本化课程、受控生成、Course Reader、Tutor、Workspace 删除、固定 eval、脱敏运行摘要和交付 Gate 均已关闭。Platform Stage 4 进入事实盘点与 Spec/ADR 分析准备，尚未批准实现练习、掌握度、复习队列或长期 Memory**。
 
 已经完成：
 
@@ -25,7 +25,7 @@
 
 下一步：
 
-- Stage 3 Slice 1/2 已完成；Tutor Session 已产品化，但短期 history 不等于长期 Memory。Slice 3 范围仍须先完成事实盘点、Spec/ADR 与人工 Gate。
+- Stage 3 已完成；Tutor Session 已产品化，但短期 history 不等于长期 Memory。Slice 3 只关闭了固定 eval、脱敏运行摘要和交付 Gate，没有提前实现 Stage 4 能力。
 - Stage 2 收尾结论和继承边界见 [Stage 2 总结与 Stage 3 输入](./02-platform-stage-2-material-lifecycle-and-citation-retrieval/STAGE_2_SUMMARY_AND_STAGE_3_INPUTS.md)。
 
 ## 3. Platform Stage 0R：基线重建

@@ -147,6 +147,56 @@ export interface TutorCitation { citation_id: string; block_key: string; documen
 export interface TutorTurn { id: string; session_id: string; ordinal: number; attempt_number: number; status: string; question: string; scope: "course" | "lesson"; section_id: string | null; lesson_id: string | null; lesson_version_id: string | null; answer_blocks: { block_key: string; type: string; text: string; citation_ids: string[] }[] | null; citations: TutorCitation[]; error_code: string | null; error_message: string | null; created_at: string; completed_at: string | null }
 export interface TutorSession { id: string; workspace_id: string; course_id: string; course_version_id: string; status: string; provider: string; model: string; created_at: string; turns: TutorTurn[] }
 
+export type AgentRunRole = "course_architect" | "lesson_writer" | "tutor";
+export type AgentRunStatus = "running" | "succeeded" | "failed" | "canceled";
+
+export interface AgentRunIdentity {
+  kind: "course_generation" | "tutor";
+  job_type: string | null;
+  course_id: string | null;
+  course_title: string | null;
+  course_deleted: boolean;
+  lesson_id: string | null;
+  lesson_title: string | null;
+  tutor_scope: string | null;
+}
+
+export interface AgentToolCallRead {
+  tool_name: string;
+  ordinal: number;
+  status: string;
+  result_count: number | null;
+  latency_ms: number | null;
+  error_code: string | null;
+  created_at: string;
+}
+
+export interface AgentRunSummary {
+  id: string;
+  role: AgentRunRole;
+  status: AgentRunStatus;
+  attempt_number: number;
+  step_count: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  created_at: string;
+  completed_at: string | null;
+  duration_seconds: number | null;
+  error_code: string | null;
+  identity: AgentRunIdentity;
+}
+
+export interface AgentRunDetail extends AgentRunSummary {
+  tool_calls: AgentToolCallRead[];
+}
+
+export interface AgentRunQuery {
+  course_id?: string;
+  role?: AgentRunRole;
+  status?: AgentRunStatus;
+  limit?: number;
+}
+
 export async function fetchReadiness(signal?: AbortSignal): Promise<Readiness> {
   return request<Readiness>("/ready", { signal });
 }
@@ -329,6 +379,20 @@ export async function retryTutorTurn(workspaceId: string, turnId: string): Promi
 
 export function tutorTurnEventsUrl(workspaceId: string, turnId: string): string {
   return `${API_BASE_URL}/api/v1/workspaces/${workspaceId}/tutor-turns/${turnId}/events`;
+}
+
+export async function fetchAgentRuns(workspaceId: string, query: AgentRunQuery = {}, signal?: AbortSignal): Promise<AgentRunSummary[]> {
+  const params = new URLSearchParams();
+  if (query.course_id) params.set("course_id", query.course_id);
+  if (query.role) params.set("role", query.role);
+  if (query.status) params.set("status", query.status);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request<AgentRunSummary[]>(`/api/v1/workspaces/${workspaceId}/agent-runs${suffix}`, { signal });
+}
+
+export async function fetchAgentRun(workspaceId: string, runId: string, signal?: AbortSignal): Promise<AgentRunDetail> {
+  return request<AgentRunDetail>(`/api/v1/workspaces/${workspaceId}/agent-runs/${runId}`, { signal });
 }
 
 interface ApiErrorBody {

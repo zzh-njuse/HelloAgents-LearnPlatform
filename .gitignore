@@ -184,3 +184,6 @@ apps/api/.pytest-tmp*/
 apps/api/t[0-9]*/
 apps/api/t/
 /research_report.md
+
+# Stage 3 eval reports (single-run, never committed)
+/artifacts/eval/

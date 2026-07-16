@@ -1,0 +1,29 @@
+{
+  "manifest_version": "stage3-slice3-v1",
+  "schema_version": "1.0",
+  "description": "Stage 3 Slice 3 fixed eval matrix. Hard cases gate the deterministic Course Architect / Lesson Writer / Tutor contracts; observational cases record non-gating metrics. Cases are executed by stage3_eval.runner against the real generation code with a fake provider (offline) or an explicitly confirmed real provider (observation only).",
+  "cases": [
+    {"id": "architect_single_source", "role": "course_architect", "behavior": "单来源大纲生成并提交", "gate": "hard", "risk": "引用必须来自当前来源快照", "expects": "committed_with_snapshot_citations"},
+    {"id": "architect_multi_source", "role": "course_architect", "behavior": "多来源大纲生成并提交", "gate": "hard", "risk": "引用必须分属各来源快照", "expects": "committed_with_snapshot_citations"},
+    {"id": "architect_insufficient_evidence", "role": "course_architect", "behavior": "证据不足不提交", "gate": "hard", "risk": "无证据时不得伪造引用或半成品", "expects": "no_commit"},
+    {"id": "architect_unknown_citation", "role": "course_architect", "behavior": "未知引用不提交", "gate": "hard", "risk": "校验失败不得落库", "expects": "no_commit"},
+    {"id": "architect_schema_budget", "role": "course_architect", "behavior": "结构预算越界不提交", "gate": "hard", "risk": "超限不得静默截断为成功", "expects": "no_commit"},
+    {"id": "lesson_simple", "role": "lesson_writer", "behavior": "简单课节生成并提交", "gate": "hard", "risk": "引用必须来自来源快照", "expects": "committed_with_snapshot_citations"},
+    {"id": "lesson_coverage_repair", "role": "lesson_writer", "behavior": "覆盖缺口受控修复后提交", "gate": "hard", "risk": "未覆盖不得直接提交", "expects": "committed_after_repair"},
+    {"id": "lesson_unknown_citation", "role": "lesson_writer", "behavior": "未知引用不提交", "gate": "hard", "risk": "校验失败不得落库", "expects": "no_commit"},
+    {"id": "lesson_budget_length", "role": "lesson_writer", "behavior": "截断或预算耗尽不提交", "gate": "hard", "risk": "超预算不得提交半成品", "expects": "no_commit"},
+    {"id": "lesson_cancel", "role": "lesson_writer", "behavior": "取消不提交", "gate": "hard", "risk": "晚到结果不得落库", "expects": "no_commit"},
+    {"id": "tutor_lesson_scope", "role": "tutor", "behavior": "本课范围带引用回答", "gate": "hard", "risk": "回答引用必须来自课程来源", "expects": "answered_with_citations"},
+    {"id": "tutor_course_scope", "role": "tutor", "behavior": "本课程范围带引用回答", "gate": "hard", "risk": "回答引用必须来自课程来源", "expects": "answered_with_citations"},
+    {"id": "tutor_no_evidence_refusal", "role": "tutor", "behavior": "无证据明确拒答", "gate": "hard", "risk": "不得伪造引用", "expects": "limitation_no_citations"},
+    {"id": "tutor_cross_source_isolation", "role": "tutor", "behavior": "仅采纳当前课程来源快照证据", "gate": "hard", "risk": "跨来源不得渗入", "expects": "out_of_source_excluded"},
+    {"id": "tutor_history_isolation", "role": "tutor", "behavior": "短期历史按 scope 与 ordinal 隔离", "gate": "hard", "risk": "历史不得越界", "expects": "bounded_history"},
+    {"id": "tutor_unknown_citation_repair", "role": "tutor", "behavior": "未知引用经修复或拒绝", "gate": "hard", "risk": "不得落库未校验引用", "expects": "no_invalid_citation_committed"},
+    {"id": "tutor_cancel", "role": "tutor", "behavior": "取消不提交", "gate": "hard", "risk": "晚到结果不得落库", "expects": "run_canceled"},
+    {"id": "language_consistency", "role": "cross", "behavior": "请求与任务语言一致", "gate": "hard", "risk": "语言不得漂移", "expects": "prompt_carries_language"},
+    {"id": "prompt_injection_untrusted", "role": "tutor", "behavior": "输入按不可信数据处理", "gate": "hard", "risk": "注入不得改写指令或泄露", "expects": "inputs_marked_untrusted"},
+    {"id": "obs_course_outline", "role": "course_architect", "behavior": "大纲观察指标", "gate": "observational", "risk": "无普适阈值", "expects": "metrics_recorded"},
+    {"id": "obs_lesson_draft", "role": "lesson_writer", "behavior": "课节观察指标", "gate": "observational", "risk": "无普适阈值", "expects": "metrics_recorded"},
+    {"id": "obs_tutor_turn", "role": "tutor", "behavior": "辅导观察指标", "gate": "observational", "risk": "无普适阈值", "expects": "metrics_recorded"}
+  ]
+}

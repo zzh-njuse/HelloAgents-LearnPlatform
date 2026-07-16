@@ -1,14 +1,14 @@
 # 数据库与部署计划
 
-版本日期：2026-07-12
+版本日期：2026-07-16
 
 状态：当前架构指导文档
 
 ## 1. 当前事实
 
-正确仓库当前没有 product Postgres、Redis、Alembic、Docker Compose 或 `apps/` 产品层。
+正确仓库已经建立 `apps/api`、`apps/web`、Postgres、Redis、Qdrant、Alembic、worker/reconciler 和 Docker Compose 产品层。Platform Stage 2 已完成；Stage 3 Slice 1/2 已建立版本化课程、受控生成、Tutor、Workspace 删除和 `agent_runs/agent_tool_calls` 最小审计事实。Slice 3 只在现有表上增加脱敏只读投影与离线 eval，不新增 eval 表或 migration。
 
-已有存储能力：
+Framework/domain 仍可复用的既有存储能力：
 
 - `hello_agents/storage/qdrant_store.py`：Qdrant vector store。
 - `hello_agents/memory/storage/document_store.py`：包括 SQLiteDocumentStore 在内的 memory 存储抽象。
@@ -17,7 +17,7 @@
 - `memory/`、`memory_data/`：本地运行数据，已忽略，不是产品数据库。
 - `data/`：内置测试与演示材料，不是用户上传目录。
 
-当前 `.env.example` 和根 `pyproject.toml` 面向 framework/demo。未来 product app 必须有独立、清晰的依赖和配置边界。
+根 `pyproject.toml` 继续面向 framework/domain；产品 API/Web 已分别拥有依赖和配置边界。凭据仍只由本地环境提供，不进入日志、公开 API 或提交。
 
 ## 2. 已确认原则
 

@@ -1,6 +1,6 @@
 # Platform Stage 3：章节化学习与 Tutor
 
-状态：Slice 1、Slice 2 已完成并于 2026-07-15 通过人工 Chrome smoke。下一步先基于 [Slice 3 输入](SLICE_3_INPUTS.md)完成事实盘点和范围 Gate，不自动引入 Stage 4 能力。
+状态：Stage 3 已完成；Slice 1/2 于 2026-07-15 通过人工 Chrome smoke，Slice 3 的 eval、脱敏运行摘要和交付闭环于 2026-07-16 通过自动化、OCR 与人工 Gate。
 
 ## 目标
 
@@ -18,6 +18,9 @@
 8. [Tutor 名词与成本模型](TUTOR_TERMS_AND_COST_MODEL.md)
 9. [Slice 2 总结](SLICE_2_SUMMARY.md)
 10. [Slice 3 输入](SLICE_3_INPUTS.md)
+11. [Slice 3 GLM 实现任务包](SLICE_3_GLM_IMPLEMENTATION_PACKET.md)
+12. [Stage 3 总结](STAGE_3_SUMMARY.md)
+13. [Stage 4 输入](../04-platform-stage-4-practice-memory-and-review/STAGE_4_INPUTS.md)
 
 ## 进入实现前的 Gate
 
@@ -70,3 +73,4 @@
 - [Slice 1 总结与 Slice 2 输入](SLICE_1_SUMMARY_AND_SLICE_2_INPUTS.md)：记录已交付合同、验证事实、暂缓风险和 Tutor 规格输入。
 - [Slice 2 总结](SLICE_2_SUMMARY.md)：记录 Tutor、Workspace 删除、课程生成质量修正和人工验收。
 - [Slice 3 输入](SLICE_3_INPUTS.md)：记录下一切片可继承事实、残余风险和必须先确认的范围。
+- [Slice 3 GLM 实现任务包](SLICE_3_GLM_IMPLEMENTATION_PACKET.md)：把已接受的 Spec 005 / ADR 007 拆成可审查的顺序实现批次。
