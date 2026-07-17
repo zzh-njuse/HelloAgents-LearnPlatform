@@ -9,6 +9,10 @@
 - [数据库与部署计划](./DATABASE_AND_DEPLOYMENT_PLAN.md)
 - [Agent 协作开发流程](./AGENT_COLLABORATION_PLAYBOOK.md)
 
+实现交接的补充流程：
+
+- [GLM 实现交接工作流](./GLM_IMPLEMENTATION_HANDOFF_WORKFLOW.md)
+
 仓库级、可被 coding agent 自动加载的执行规则位于根目录 [AGENTS.md](../AGENTS.md)。
 
 ## 当前阶段
@@ -23,7 +27,7 @@
 - [Platform Stage 2：资料生命周期与引用检索](./02-platform-stage-2-material-lifecycle-and-citation-retrieval/README.md)
 - [Stage 2 总结与 Stage 3 输入](./02-platform-stage-2-material-lifecycle-and-citation-retrieval/STAGE_2_SUMMARY_AND_STAGE_3_INPUTS.md)
 - [Platform Stage 3：章节化学习与 Tutor（已完成）](./03-platform-stage-3-chapter-learning-and-tutor/README.md)
-- [Platform Stage 4：练习、记忆与复习闭环（事实输入与 Spec/ADR 准备）](./04-platform-stage-4-practice-memory-and-review/README.md)
+- [Platform Stage 4：练习、记忆与复习闭环（Slice 1 已完成，进入 Slice 2 Spec/ADR）](./04-platform-stage-4-practice-memory-and-review/README.md)
 
 ## Framework 指南
 

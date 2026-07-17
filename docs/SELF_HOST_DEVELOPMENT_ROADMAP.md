@@ -15,7 +15,7 @@
 
 ## 2. 当前状态
 
-当前状态：**Platform Stage 3 已完成；版本化课程、受控生成、Course Reader、Tutor、Workspace 删除、固定 eval、脱敏运行摘要和交付 Gate 均已关闭。Platform Stage 4 进入事实盘点与 Spec/ADR 分析准备，尚未批准实现练习、掌握度、复习队列或长期 Memory**。
+当前状态：**Platform Stage 3 已完成。Platform Stage 4 Slice 1 的课节练习、整份交卷、确定性单选评分、rubric 约束简答反馈、独立 practice worker、OCR/eval 与人工 Chrome 主路径 Gate 已完成；当前进入 Slice 2 掌握度、复习队列与可管理 Memory 的 Spec/ADR 分析，尚未批准 Slice 2 实现**。
 
 已经完成：
 
@@ -25,7 +25,7 @@
 
 下一步：
 
-- Stage 3 已完成；Tutor Session 已产品化，但短期 history 不等于长期 Memory。Slice 3 只关闭了固定 eval、脱敏运行摘要和交付 Gate，没有提前实现 Stage 4 能力。
+- Stage 3 已完成；Tutor Session 已产品化，但短期 history 不等于长期 Memory。Stage 4 Slice 1 已提供可追溯 Attempt/Feedback，但这些事实仍不能自动升级为掌握度或长期 Memory。
 - Stage 2 收尾结论和继承边界见 [Stage 2 总结与 Stage 3 输入](./02-platform-stage-2-material-lifecycle-and-citation-retrieval/STAGE_2_SUMMARY_AND_STAGE_3_INPUTS.md)。
 
 ## 3. Platform Stage 0R：基线重建
@@ -166,6 +166,8 @@ Office、图片 OCR、网页/Git 导入和更广泛 parser 不属于已确认的
 - 固定 eval case 可重复运行。
 
 ## 7. Platform Stage 4：练习、记忆与复习闭环
+
+方向上拆为四个顺序 Slice：练习/作答/反馈，掌握度/复习/Memory，教学 Skill 产品化，以及选定具体场景后的受控 MCP。各 Slice 仍需独立 Spec/ADR 和人工 Gate；MCP 当前仅保留代码执行沙箱、数学工具和日历同步候选，不提前锁定。
 
 ### 用户价值
 

@@ -60,3 +60,23 @@ def enqueue_tutor_session_deletion(settings: Settings, session_id: str) -> None:
         )
     finally:
         connection.close()
+
+
+def enqueue_practice_job(settings: Settings, job_id: str) -> None:
+    connection = Redis.from_url(settings.redis_url)
+    try:
+        Queue(settings.practice_queue_name, connection=connection).enqueue(
+            "learn_platform_api.practice_workers.run_practice_job", job_id
+        )
+    finally:
+        connection.close()
+
+
+def enqueue_practice_set_deletion(settings: Settings, set_id: str) -> None:
+    connection = Redis.from_url(settings.redis_url)
+    try:
+        Queue(settings.practice_queue_name, connection=connection).enqueue(
+            "learn_platform_api.practice_workers.cleanup_practice_set", set_id
+        )
+    finally:
+        connection.close()

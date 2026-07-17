@@ -4,9 +4,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from learn_platform_api.db.models import CourseGenerationJob, IngestionJob, TutorSession, TutorTurn, WorkspaceDeletionJob
+from learn_platform_api.db.models import CourseGenerationJob, IngestionJob, PracticeJob, PracticeSet, TutorSession, TutorTurn, WorkspaceDeletionJob
 from learn_platform_api.services.batches import reconcile_stale_batches
-from learn_platform_api.services.queue import enqueue_course_generation_job, enqueue_ingestion_job, enqueue_tutor_session_deletion, enqueue_tutor_turn, enqueue_workspace_deletion_job
+from learn_platform_api.services.queue import enqueue_course_generation_job, enqueue_ingestion_job, enqueue_practice_job, enqueue_practice_set_deletion, enqueue_tutor_session_deletion, enqueue_tutor_turn, enqueue_workspace_deletion_job
 from learn_platform_api.settings import Settings
 
 logger = logging.getLogger("learn_platform_api.jobs")
@@ -82,6 +82,37 @@ def reconcile_jobs(db: Session, settings: Settings) -> int:
         try: enqueue_tutor_session_deletion(settings, session.id)
         except Exception: logger.exception("tutor_session_cleanup_reconcile_failed session_id=%s", session.id)
 
+    practice_jobs = list(db.scalars(select(PracticeJob).where(
+        ((PracticeJob.status == "running") & PracticeJob.lease_expires_at.is_not(None) & (PracticeJob.lease_expires_at < current))
+        | ((PracticeJob.status == "retry_wait") & PracticeJob.next_attempt_at.is_not(None) & (PracticeJob.next_attempt_at <= current))
+        | ((PracticeJob.status == "queued") & (PracticeJob.updated_at < stale_before))
+    ).with_for_update(skip_locked=True)))
+    for job in practice_jobs:
+        job.status = "queued"; job.worker_id = None; job.lease_expires_at = None; job.heartbeat_at = None; job.next_attempt_at = None; job.updated_at = current
+    if practice_jobs:
+        db.commit()
+    for job in practice_jobs:
+        try: enqueue_practice_job(settings, job.id)
+        except Exception:
+            logger.exception("practice_reconcile_enqueue_failed job_id=%s", job.id); job.status = "queue_failed"; job.error_code = "queue_unavailable"; job.error_message = "练习队列暂时不可用"
+    if practice_jobs:
+        db.commit()
+
+    canceled_practice_jobs = list(db.scalars(select(PracticeJob).where(PracticeJob.status == "cancel_requested").with_for_update(skip_locked=True)))
+    for job in canceled_practice_jobs:
+        job.status = "canceled"; job.error_code = "practice_canceled"; job.error_message = "练习任务已取消"; job.worker_id = None; job.lease_expires_at = None; job.heartbeat_at = None; job.next_attempt_at = None; job.completed_at = current; job.updated_at = current
+    if canceled_practice_jobs:
+        db.commit()
+
+    deleting_sets = list(db.scalars(select(PracticeSet).where(PracticeSet.lifecycle_status == "deleting", PracticeSet.deleted_at < stale_before).with_for_update(skip_locked=True)))
+    for practice_set in deleting_sets:
+        practice_set.deleted_at = current
+    if deleting_sets:
+        db.commit()
+    for practice_set in deleting_sets:
+        try: enqueue_practice_set_deletion(settings, practice_set.id)
+        except Exception: logger.exception("practice_set_cleanup_reconcile_failed set_id=%s", practice_set.id)
+
     deletion_jobs = list(db.scalars(select(WorkspaceDeletionJob).where(
         ((WorkspaceDeletionJob.status == "running") & WorkspaceDeletionJob.lease_expires_at.is_not(None) & (WorkspaceDeletionJob.lease_expires_at < current))
         | ((WorkspaceDeletionJob.status == "retry_wait") & WorkspaceDeletionJob.next_attempt_at.is_not(None) & (WorkspaceDeletionJob.next_attempt_at <= current))
@@ -102,4 +133,4 @@ def reconcile_jobs(db: Session, settings: Settings) -> int:
 
     if ingestion_jobs or stale_batches:
         logger.info("ingestion_reconciled recovered_jobs=%s reconciled_batches=%s", len(ingestion_jobs), stale_batches)
-    return len(ingestion_jobs) + len(course_jobs) + len(canceled_course_jobs) + len(tutor_turns) + len(deleting_sessions) + len(deletion_jobs) + stale_batches
+    return len(ingestion_jobs) + len(course_jobs) + len(canceled_course_jobs) + len(tutor_turns) + len(deleting_sessions) + len(practice_jobs) + len(canceled_practice_jobs) + len(deleting_sets) + len(deletion_jobs) + stale_batches

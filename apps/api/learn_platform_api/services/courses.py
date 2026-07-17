@@ -288,4 +288,8 @@ def delete_course(db: Session, workspace_id: str, course_id: str) -> bool:
     db.execute(update(CourseGenerationJob).where(CourseGenerationJob.course_id == course.id, CourseGenerationJob.status.in_({"queued", "retry_wait"})).values(status="canceled"))
     db.execute(update(CourseGenerationJob).where(CourseGenerationJob.course_id == course.id, CourseGenerationJob.status == "running").values(status="cancel_requested"))
     db.commit()
+    # Clean practice derived facts owned by this course before returning.
+    from learn_platform_api.settings import get_settings as _get_settings
+    from learn_platform_api.services.practice import delete_sets_for_course
+    delete_sets_for_course(db, _get_settings(), workspace_id, course.id)
     return True

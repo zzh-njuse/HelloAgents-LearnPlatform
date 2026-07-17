@@ -163,12 +163,14 @@ button { cursor: pointer; }
 .course-workspace, .course-create, .course-detail, .outline { gap: 12px; min-width: 0; }
 .course-workspace, .course-create, .course-detail { display: grid; }
 .job-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.job-queue { display: grid; gap: 7px; max-height: min(34vh, 320px); overflow: auto; }
+.job-queue { display: grid; gap: 5px; }
+.job-queue-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.job-queue-heading small { color: #657068; font-size: 10px; font-weight: 500; }
 .job-queue > .job-summary { padding-top: 7px; border-top: 1px solid #d7dfd6; }
 .job-queue > .job-summary.failed { color: #8f3028; }
 .generation-language { display: flex; align-items: center; justify-content: flex-end; gap: 8px; font-size: 13px; }
 .generation-language select { width: auto; min-width: 118px; }
-.job-summary-sticky { position: sticky; top: 10px; z-index: 5; min-height: 46px; padding: 9px 12px; border: 1px solid #aebcae; border-radius: 5px; background: #f4f8f3; box-shadow: 0 4px 12px rgb(39 51 42 / 10%); }
+.job-summary-sticky { position: sticky; top: 10px; z-index: 5; min-height: 46px; padding: 8px 11px; border: 1px solid #aebcae; border-radius: 5px; background: #f4f8f3; box-shadow: 0 4px 12px rgb(39 51 42 / 10%); }
 .job-summary-sticky.failed { border-color: #c98d86; background: #fff4f2; }
 .job-summary-sticky p { flex: 1; margin: 0; }
 .course-create label { display: grid; gap: 6px; color: #4f5951; font-size: 12px; font-weight: 700; }
@@ -336,3 +338,75 @@ button { cursor: pointer; }
   .tool-call-list li { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; }
   .run-metrics { flex-basis: 100%; text-align: left; }
 }
+
+/* Stage 4 practice UI */
+.hidden { display: none !important; }
+.reader-view-switch { display: inline-flex; margin-bottom: 12px; border: 1px solid #aeb9b0; border-radius: 6px; overflow: hidden; }
+.reader-view-switch button { min-height: 32px; padding: 0 14px; color: #4d5c50; background: #fff; border: 0; font-size: 12px; font-weight: 700; }
+.reader-view-switch button + button { border-left: 1px solid #aeb9b0; }
+.reader-view-switch button.active { color: #244b2e; background: #e7f0e5; }
+.reader-content, .reader-practice { display: grid; gap: 16px; min-width: 0; }
+.reader-right { display: grid; gap: 12px; align-content: start; min-width: 0; }
+
+.practice-panel { display: grid; gap: 14px; padding: 4px 0; }
+.practice-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.practice-header h3 { display: flex; align-items: center; gap: 7px; margin: 4px 0 0; font-size: 16px; }
+.practice-header select { max-width: 200px; padding: 7px 8px; border: 1px solid #cdd5ce; border-radius: 5px; background: #fff; }
+.practice-job { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid #bfd3bd; border-radius: 5px; background: #eef3ed; font-size: 12px; }
+.practice-job.failed { border-color: #c98d86; background: #fff4f2; }
+.practice-job small { color: #9c3f35; }
+.practice-generate { display: grid; gap: 10px; padding: 16px; border: 1px dashed #cbd4cc; border-radius: 6px; background: #f7f8f6; }
+.practice-field { display: grid; gap: 4px; color: #4f5951; font-size: 12px; font-weight: 700; }
+.practice-field input, .practice-field select { width: fit-content; padding: 7px 8px; border: 1px solid #cdd5ce; border-radius: 5px; background: #fff; }
+.practice-set-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; gap: 8px; }
+.practice-set-picker { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; padding: 10px 12px; color: #315d38; background: #eef3ed; border: 1px solid #b8cbb9; border-radius: 6px; font-size: 12px; font-weight: 800; }
+.practice-set-picker > span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.practice-set-picker select { width: 100%; min-width: 0; padding: 9px 34px 9px 10px; color: #26362a; background: #fff; border: 1px solid #9fb5a2; border-radius: 5px; font: inherit; font-weight: 600; }
+.practice-new-button { align-self: stretch; white-space: nowrap; }
+.practice-return-button { width: fit-content; }
+.practice-focus { display: grid; gap: 12px; padding: 16px; border: 1px solid #d9dfda; border-radius: 6px; background: #fff; }
+.practice-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: #657068; font-size: 12px; }
+.practice-stem { margin: 0; color: #28322a; font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
+.practice-options { display: grid; gap: 8px; }
+.practice-option { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid #d9dfda; border-radius: 5px; font-size: 13px; line-height: 1.5; cursor: pointer; }
+.practice-option.selected { border-color: #5a8761; background: #eef5ed; }
+.practice-option input { margin-top: 3px; }
+.practice-textarea { width: 100%; padding: 10px; border: 1px solid #cdd5ce; border-radius: 5px; resize: vertical; min-height: 96px; font: inherit; }
+.practice-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.submission-consent { padding: 10px 12px; background: #f7f8f6; border: 1px solid #d7ddd8; border-radius: 5px; }
+.practice-feedback { display: grid; gap: 8px; padding: 12px; border-radius: 5px; background: #f3f6f2; border-left: 3px solid #88a38d; }
+.practice-feedback.grading { display: flex; flex-direction: row; align-items: center; gap: 8px; color: #657068; }
+.practice-feedback.failed { color: #9c3f35; }
+.practice-feedback.verdict-correct { border-left-color: #5a995e; }
+.practice-feedback.verdict-incorrect, .practice-feedback.verdict-ungradable { border-left-color: #c17a30; }
+.practice-feedback-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.practice-feedback-head small { color: #657068; font-size: 10px; }
+.practice-rubric { margin: 0; padding-left: 18px; display: grid; gap: 4px; color: #303830; font-size: 12px; }
+.feedback-block { margin: 0; color: #303830; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.feedback-block.improvement { color: #8a5a22; }
+
+.practice-history-panel { display: grid; gap: 10px; padding: 14px; max-height: calc(100vh - 40px); max-height: calc(100dvh - 40px); overflow-y: auto; background: #fff; border: 1px solid #d9dfda; border-radius: 6px; }
+.practice-history-panel header { display: flex; align-items: center; gap: 7px; }
+.practice-history-panel h3 { display: flex; align-items: center; gap: 7px; margin: 3px 0 0; font-size: 15px; }
+.practice-history-panel select { width: 100%; padding: 7px 8px; border: 1px solid #cdd5ce; border-radius: 5px; background: #fff; }
+.practice-history-list { display: grid; gap: 8px; align-content: start; }
+.practice-history-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; padding: 8px 10px; border: 1px solid #e2e6e2; border-radius: 5px; }
+.practice-history-status { grid-column: 1; color: #315d38; font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 5px; }
+.practice-history-item small { grid-column: 1; color: #657068; font-size: 10px; }
+.practice-history-item .icon-button { grid-column: 2; grid-row: 1 / span 2; width: 30px; height: 30px; }
+
+@media (max-width: 860px) {
+  .practice-header { flex-direction: column; align-items: stretch; }
+  .practice-set-toolbar { grid-template-columns: 1fr; }
+  .practice-set-picker { grid-template-columns: 1fr; }
+}
+
+.reader-directory { display: grid; align-content: start; gap: 10px; }
+.reader-directory > div { display: grid; gap: 3px; }
+.reader-directory strong { color: #657068; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.directory-lesson { display: block; width: 100%; padding: 6px 8px; text-align: left; color: #303830; background: transparent; border: 0; border-radius: 4px; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.directory-lesson:hover:not(:disabled) { background: #eef3ed; }
+.directory-lesson.active { background: #e7f0e5; font-weight: 700; }
+.directory-lesson:disabled { color: #9aa39c; cursor: default; }
+.practice-history-context { display: grid; gap: 2px; }
+.practice-history-context small { color: #657068; font-size: 11px; }

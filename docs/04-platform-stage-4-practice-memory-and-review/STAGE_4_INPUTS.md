@@ -1,6 +1,6 @@
 # Platform Stage 4 输入
 
-状态：事实输入，尚未形成 Stage 4 Spec/ADR
+状态：Stage 4 初始事实输入；Slice 1 已完成，当前 Slice 2 输入见 `SLICE_2_INPUTS.md`
 
 日期：2026-07-16
 
@@ -42,6 +42,8 @@
 3. 再写掌握度与复习 Spec：明确用户可见的薄弱点、推荐理由和复习操作。
 4. 写 Learning Event、Mastery 与 Memory ADR：定义推断、提升、纠正、删除、过期和重算边界。
 5. 最后决定是否需要独立 Exercise Agent 或 Review Coach；不得先以多 Agent 形式替代产品合同。
+
+四切片方向已归档为 [Stage 4 四切片方向计划](STAGE_4_SLICE_PLAN.md)：Slice 1 练习/作答/反馈，Slice 2 掌握度/复习/Memory，Slice 3 教学 Skill，Slice 4 受控 MCP。该计划不提前批准任何 Slice 的实现。
 
 ## 开始实现前 Gate
 

@@ -11,6 +11,8 @@ from learn_platform_api.db.models import (
     CourseSection, CourseSectionCitation, CourseVersion, CourseVersionSource,
     DocumentChunk, DocumentParseReport, DocumentVersion, IngestionBatch,
     IngestionBatchItem, IngestionJob, Lesson, LessonCitation, LessonVersion,
+    PracticeAttempt, PracticeFeedback, PracticeItem, PracticeItemCitation,
+    PracticeJob, PracticeJobSource, PracticeSet,
     RagAnswerTrace, RagQueryTrace, SourceDocument, TutorSession, TutorTurn,
     TutorTurnCitation, Workspace, WorkspaceDeletionJob,
 )
@@ -34,11 +36,13 @@ def deletion_impact(db: Session, workspace_id: str) -> dict[str, int] | None:
     ingestion = db.scalar(select(func.count()).select_from(IngestionJob).where(IngestionJob.workspace_id == workspace_id, IngestionJob.status.in_(ACTIVE_JOB_STATUSES))) or 0
     courses = db.scalar(select(func.count()).select_from(CourseGenerationJob).where(CourseGenerationJob.workspace_id == workspace_id, CourseGenerationJob.status.in_(ACTIVE_JOB_STATUSES))) or 0
     tutors = db.scalar(select(func.count()).select_from(TutorTurn).where(TutorTurn.workspace_id == workspace_id, TutorTurn.status.in_(ACTIVE_JOB_STATUSES))) or 0
+    practice = db.scalar(select(func.count()).select_from(PracticeJob).where(PracticeJob.workspace_id == workspace_id, PracticeJob.status.in_(ACTIVE_JOB_STATUSES))) or 0
     return {
         "document_count": db.scalar(select(func.count()).select_from(SourceDocument).where(SourceDocument.workspace_id == workspace_id)) or 0,
         "course_count": db.scalar(select(func.count()).select_from(Course).where(Course.workspace_id == workspace_id)) or 0,
-        "active_job_count": ingestion + courses + tutors,
+        "active_job_count": ingestion + courses + tutors + practice,
         "tutor_session_count": db.scalar(select(func.count()).select_from(TutorSession).where(TutorSession.workspace_id == workspace_id)) or 0,
+        "practice_set_count": db.scalar(select(func.count()).select_from(PracticeSet).where(PracticeSet.workspace_id == workspace_id)) or 0,
     }
 
 
@@ -67,6 +71,7 @@ def create_deletion(
     db.execute(update(IngestionJob).where(IngestionJob.workspace_id == workspace_id, IngestionJob.status.in_(ACTIVE_JOB_STATUSES)).values(status="cancel_requested", lease_expires_at=None, next_attempt_at=None))
     db.execute(update(CourseGenerationJob).where(CourseGenerationJob.workspace_id == workspace_id, CourseGenerationJob.status.in_(ACTIVE_JOB_STATUSES)).values(status="cancel_requested", lease_expires_at=None, next_attempt_at=None))
     db.execute(update(TutorTurn).where(TutorTurn.workspace_id == workspace_id, TutorTurn.status.in_(ACTIVE_JOB_STATUSES)).values(status="cancel_requested", lease_expires_at=None, next_attempt_at=None))
+    db.execute(update(PracticeJob).where(PracticeJob.workspace_id == workspace_id, PracticeJob.status.in_(ACTIVE_JOB_STATUSES)).values(status="cancel_requested", lease_expires_at=None, next_attempt_at=None))
     db.execute(update(IngestionBatchItem).where(IngestionBatchItem.batch_id.in_(select(IngestionBatch.id).where(IngestionBatch.workspace_id == workspace_id)), IngestionBatchItem.status.in_({"pending", "queued", "processing"})).values(status="cancel_requested"))
     job = WorkspaceDeletionJob(workspace_id=workspace_id, status="queued", idempotency_key=idempotency_key)
     db.add(job)
@@ -139,6 +144,14 @@ def _delete_database_rows(db: Session, workspace_id: str) -> None:
 
     db.execute(delete(AgentToolCall).where(AgentToolCall.agent_run_id.in_(run_ids)))
     db.execute(delete(AgentRun).where(AgentRun.workspace_id == workspace_id))
+    # Practice derived facts reference courses/lessons/chunks; delete them first.
+    db.execute(delete(PracticeFeedback).where(PracticeFeedback.workspace_id == workspace_id))
+    db.execute(delete(PracticeAttempt).where(PracticeAttempt.workspace_id == workspace_id))
+    db.execute(delete(PracticeItemCitation).where(PracticeItemCitation.workspace_id == workspace_id))
+    db.execute(delete(PracticeItem).where(PracticeItem.workspace_id == workspace_id))
+    db.execute(delete(PracticeJobSource).where(PracticeJobSource.workspace_id == workspace_id))
+    db.execute(delete(PracticeJob).where(PracticeJob.workspace_id == workspace_id))
+    db.execute(delete(PracticeSet).where(PracticeSet.workspace_id == workspace_id))
     db.execute(delete(TutorTurnCitation).where(TutorTurnCitation.workspace_id == workspace_id))
     db.execute(delete(TutorTurn).where(TutorTurn.workspace_id == workspace_id))
     db.execute(delete(TutorSession).where(TutorSession.workspace_id == workspace_id))

@@ -7,14 +7,13 @@ const active = (status: string) => ["queued", "running", "retry_wait", "cancel_r
 const errorMessage = (value: unknown) => value instanceof Error ? value.message : String(value);
 const pageLabel = (start: number | null, end: number | null) => start == null ? null : start === end || end == null ? `第 ${start} 页` : `第 ${start}-${end} 页`;
 
-export function TutorPanel({ workspaceId, reader }: { workspaceId: string; reader: CourseReader }) {
+export function TutorPanel({ workspaceId, reader, lessonId, onLessonId }: { workspaceId: string; reader: CourseReader; lessonId: string; onLessonId: (value: string) => void }) {
   const lessons = useMemo(() => reader.version.sections.flatMap((section) => section.lessons
     .filter((lesson) => lesson.published_version)
     .map((lesson) => ({ section, lesson, version: lesson.published_version! }))), [reader]);
   const [sessions, setSessions] = useState<TutorSession[]>([]);
   const [session, setSession] = useState<TutorSession | null>(null);
   const [scope, setScope] = useState<"lesson" | "course">("lesson");
-  const [lessonId, setLessonId] = useState(lessons[0]?.lesson.id ?? "");
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +26,7 @@ export function TutorPanel({ workspaceId, reader }: { workspaceId: string; reade
   }, [reader.course.id, reader.version.id, workspaceId]);
 
   useEffect(() => {
-    setSession(null); setLessonId(lessons[0]?.lesson.id ?? "");
+    setSession(null);
     void refreshSessions().catch((value) => setError(errorMessage(value)));
   }, [lessons, refreshSessions]);
 
@@ -81,7 +80,7 @@ export function TutorPanel({ workspaceId, reader }: { workspaceId: string; reade
     <div className="tutor-meta"><span>课程版本 {reader.version.version_number}</span><span>{session ? `${session.provider} / ${session.model}` : "尚未创建 Session"}</span></div>
     {sessions.length ? <select aria-label="Tutor Session" onChange={(event) => setSession(sessions.find((item) => item.id === event.target.value) ?? null)} value={sessionId ?? ""}>{sessions.map((item) => <option key={item.id} value={item.id}>{new Date(item.created_at).toLocaleString("zh-CN")}</option>)}</select> : null}
     <div className="scope-control"><button className={scope === "lesson" ? "active" : ""} onClick={() => setScope("lesson")} type="button">当前课节</button><button className={scope === "course" ? "active" : ""} onClick={() => setScope("course")} type="button">整门课程</button></div>
-    {scope === "lesson" ? <select aria-label="Tutor 课节" onChange={(event) => setLessonId(event.target.value)} value={lessonId}>{lessons.map(({ lesson }) => <option key={lesson.id} value={lesson.id}>{lesson.title}</option>)}</select> : null}
+    {scope === "lesson" ? <select aria-label="Tutor 课节" onChange={(event) => onLessonId(event.target.value)} value={lessonId}>{lessons.map(({ lesson }) => <option key={lesson.id} value={lesson.id}>{lesson.title}</option>)}</select> : null}
     <div className="tutor-history">{visibleTurns.length ? visibleTurns.map((turn) => {
       const numbers = new Map(turn.citations.map((citation, index) => [citation.citation_id, index + 1]));
       return <article key={turn.id}><p className="tutor-question">{turn.question}</p>{turn.answer_blocks?.map((block) => <div className={`tutor-answer ${block.type}`} key={block.block_key}><p>{block.text}</p>{block.citation_ids.length ? <small className="citation-markers">{block.citation_ids.map((id) => numbers.has(id) ? <span key={id}>[{numbers.get(id)}]</span> : null)}</small> : null}</div>)}{turn.citations.map((citation) => <small className="tutor-citation" key={citation.citation_id}>{numbers.get(citation.citation_id)}. {[citation.document_name, ...citation.heading_path, pageLabel(citation.page_start, citation.page_end)].filter(Boolean).join(" > ")}</small>)}<footer><span>{turn.status}</span>{active(turn.status) ? <button disabled={busy} onClick={() => void mutateTurn(() => cancelTutorTurn(workspaceId, turn.id))} type="button"><Square size={13} />取消</button> : null}{["failed", "canceled", "queue_failed"].includes(turn.status) ? <button disabled={busy} onClick={() => void mutateTurn(() => retryTutorTurn(workspaceId, turn.id))} type="button"><RefreshCw size={13} />重试</button> : null}</footer>{turn.error_message ? <p className="form-error">{turn.error_message}</p> : null}</article>;

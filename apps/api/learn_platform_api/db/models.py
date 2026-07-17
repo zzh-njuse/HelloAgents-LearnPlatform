@@ -449,6 +449,7 @@ class AgentRun(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     course_generation_job_id: Mapped[str | None] = mapped_column(ForeignKey("course_generation_jobs.id"), index=True, nullable=True)
     tutor_turn_id: Mapped[str | None] = mapped_column(ForeignKey("tutor_turns.id", ondelete="CASCADE"), index=True, nullable=True)
+    practice_job_id: Mapped[str | None] = mapped_column(ForeignKey("practice_jobs.id"), index=True, nullable=True)
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
     role: Mapped[str] = mapped_column(String(40), nullable=False)
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -474,4 +475,140 @@ class AgentToolCall(Base):
     result_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class PracticeJob(Base):
+    __tablename__ = "practice_jobs"
+    __table_args__ = (UniqueConstraint("workspace_id", "idempotency_key", name="uq_practice_jobs_workspace_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    job_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    practice_set_id: Mapped[str | None] = mapped_column(ForeignKey("practice_sets.id", use_alter=True), index=True, nullable=True)
+    practice_attempt_id: Mapped[str | None] = mapped_column(ForeignKey("practice_attempts.id", use_alter=True), index=True, nullable=True)
+    course_id: Mapped[str | None] = mapped_column(ForeignKey("courses.id"), index=True, nullable=True)
+    course_version_id: Mapped[str | None] = mapped_column(ForeignKey("course_versions.id"), index=True, nullable=True)
+    lesson_id: Mapped[str | None] = mapped_column(ForeignKey("lessons.id"), index=True, nullable=True)
+    lesson_version_id: Mapped[str | None] = mapped_column(ForeignKey("lesson_versions.id"), index=True, nullable=True)
+    output_language: Mapped[str] = mapped_column(String(10), nullable=False)
+    difficulty: Mapped[str] = mapped_column(String(20), nullable=False)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    worker_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    external_processing_ack_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PracticeJobSource(Base):
+    __tablename__ = "practice_job_sources"
+    __table_args__ = (UniqueConstraint("practice_job_id", "document_version_id", name="uq_practice_job_sources_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    practice_job_id: Mapped[str] = mapped_column(ForeignKey("practice_jobs.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    document_id: Mapped[str] = mapped_column(ForeignKey("source_documents.id"), nullable=False)
+    document_version_id: Mapped[str] = mapped_column(ForeignKey("document_versions.id"), nullable=False)
+
+
+class PracticeSet(Base):
+    __tablename__ = "practice_sets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id"), index=True, nullable=False)
+    course_version_id: Mapped[str] = mapped_column(ForeignKey("course_versions.id"), index=True, nullable=False)
+    lesson_id: Mapped[str] = mapped_column(ForeignKey("lessons.id"), index=True, nullable=False)
+    lesson_version_id: Mapped[str] = mapped_column(ForeignKey("lesson_versions.id"), index=True, nullable=False)
+    practice_job_id: Mapped[str | None] = mapped_column(ForeignKey("practice_jobs.id", use_alter=True), index=True, nullable=True)
+    output_language: Mapped[str] = mapped_column(String(10), nullable=False)
+    difficulty: Mapped[str] = mapped_column(String(20), nullable=False)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    generation_config: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    lifecycle_status: Mapped[str] = mapped_column(String(20), default="active", nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PracticeItem(Base):
+    __tablename__ = "practice_items"
+    __table_args__ = (UniqueConstraint("practice_set_id", "ordinal", name="uq_practice_items_ordinal"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    practice_set_id: Mapped[str] = mapped_column(ForeignKey("practice_sets.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    item_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    stem: Mapped[str] = mapped_column(Text, nullable=False)
+    options: Mapped[list[dict[str, object]] | None] = mapped_column(JSON, nullable=True)
+    # Hidden grading material: correct option, option rationales, rubric and
+    # reference answer. Never projected into a pre-submission read schema.
+    answer_spec: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class PracticeItemCitation(Base):
+    __tablename__ = "practice_item_citations"
+    __table_args__ = (UniqueConstraint("practice_item_id", "citation_key", name="uq_practice_item_citations_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    practice_item_id: Mapped[str] = mapped_column(ForeignKey("practice_items.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    citation_key: Mapped[str] = mapped_column(String(50), nullable=False)
+    document_id: Mapped[str] = mapped_column(ForeignKey("source_documents.id"), nullable=False)
+    document_version_id: Mapped[str] = mapped_column(ForeignKey("document_versions.id"), nullable=False)
+    document_chunk_id: Mapped[str] = mapped_column(ForeignKey("document_chunks.id"), nullable=False)
+
+
+class PracticeAttempt(Base):
+    __tablename__ = "practice_attempts"
+    __table_args__ = (
+        UniqueConstraint("practice_item_id", "ordinal", name="uq_practice_attempts_item_ordinal"),
+        UniqueConstraint("practice_item_id", "idempotency_key", name="uq_practice_attempts_item_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    practice_item_id: Mapped[str] = mapped_column(ForeignKey("practice_items.id"), index=True, nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    item_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    answer_payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="succeeded", nullable=False, index=True)
+    practice_job_id: Mapped[str | None] = mapped_column(ForeignKey("practice_jobs.id"), index=True, nullable=True)
+    external_processing_ack_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PracticeFeedback(Base):
+    __tablename__ = "practice_feedback"
+    __table_args__ = (UniqueConstraint("practice_attempt_id", name="uq_practice_feedback_attempt"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    practice_attempt_id: Mapped[str] = mapped_column(ForeignKey("practice_attempts.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    verdict: Mapped[str] = mapped_column(String(30), nullable=False)
+    score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    criterion_results: Mapped[list[dict[str, object]] | None] = mapped_column(JSON, nullable=True)
+    feedback_blocks: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
+    is_ai_graded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

@@ -7,6 +7,10 @@ from learn_platform_api.db.models import (
     Course,
     CourseGenerationJob,
     Lesson,
+    PracticeAttempt,
+    PracticeItem,
+    PracticeJob,
+    PracticeSet,
     TutorSession,
     TutorTurn,
 )
@@ -103,6 +107,40 @@ def _identity(db: Session, run: AgentRun) -> dict[str, object]:
             identity["course_deleted"] = True
         return identity
 
+    if run.practice_job_id is not None:
+        identity["kind"] = "practice"
+        job = db.get(PracticeJob, run.practice_job_id)
+        if job is None or job.workspace_id != run.workspace_id:
+            identity["course_deleted"] = True
+            return identity
+        identity["job_type"] = job.job_type
+        course_id = job.course_id
+        lesson_id = job.lesson_id
+        if course_id is None and job.practice_attempt_id:
+            # Grading jobs resolve their course/lesson through the attempt chain.
+            attempt = db.get(PracticeAttempt, job.practice_attempt_id)
+            item = db.get(PracticeItem, attempt.practice_item_id) if attempt else None
+            practice_set = db.get(PracticeSet, item.practice_set_id) if item else None
+            if practice_set and practice_set.workspace_id == run.workspace_id:
+                course_id = practice_set.course_id
+                lesson_id = practice_set.lesson_id
+        course = db.get(Course, course_id) if course_id else None
+        if (
+            course is not None
+            and course.workspace_id == run.workspace_id
+            and course.lifecycle_status == "active"
+        ):
+            identity["course_id"] = course.id
+            identity["course_title"] = course.title
+            if lesson_id:
+                identity["lesson_id"] = lesson_id
+                lesson = db.get(Lesson, lesson_id)
+                if lesson is not None and lesson.workspace_id == run.workspace_id:
+                    identity["lesson_title"] = lesson.title
+        else:
+            identity["course_deleted"] = True
+        return identity
+
     # No association recorded: nothing identifiable, but still safe to surface.
     identity["course_deleted"] = True
     return identity
@@ -152,9 +190,29 @@ def list_agent_runs(
                 TutorSession.course_id == course_id,
             )
         )
+        # Practice generate jobs carry course_id directly; grading jobs resolve
+        # through attempt -> item -> set -> course.
+        practice_generate = select(PracticeJob.id).where(
+            PracticeJob.workspace_id == workspace_id,
+            PracticeJob.course_id == course_id,
+        )
+        practice_grade_sets = select(PracticeSet.id).where(
+            PracticeSet.workspace_id == workspace_id, PracticeSet.course_id == course_id
+        )
+        practice_grade_items = select(PracticeItem.id).where(
+            PracticeItem.practice_set_id.in_(practice_grade_sets)
+        )
+        practice_grade_attempts = select(PracticeAttempt.id).where(
+            PracticeAttempt.practice_item_id.in_(practice_grade_items)
+        )
+        practice_grade_jobs = select(PracticeJob.id).where(
+            PracticeJob.practice_attempt_id.in_(practice_grade_attempts)
+        )
         statement = statement.where(
             AgentRun.course_generation_job_id.in_(course_jobs)
             | AgentRun.tutor_turn_id.in_(tutor_turns)
+            | AgentRun.practice_job_id.in_(practice_generate)
+            | AgentRun.practice_job_id.in_(practice_grade_jobs)
         )
     if role is not None:
         statement = statement.where(AgentRun.role == role)

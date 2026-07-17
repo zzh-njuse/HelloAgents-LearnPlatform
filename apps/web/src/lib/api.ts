@@ -395,6 +395,64 @@ export async function fetchAgentRun(workspaceId: string, runId: string, signal?:
   return request<AgentRunDetail>(`/api/v1/workspaces/${workspaceId}/agent-runs/${runId}`, { signal });
 }
 
+export type PracticeItemType = "single_choice" | "short_answer";
+export type PracticeDifficulty = "easy" | "standard" | "hard";
+
+export interface PracticeCitation { citation_key: string; document_name: string; heading_path: string[]; page_start: number | null; page_end: number | null; available: boolean }
+export interface PracticeOptionRead { option_key: string; text: string }
+export interface PracticeItemRead { id: string; ordinal: number; item_type: PracticeItemType; stem: string; options: PracticeOptionRead[] | null; citations: PracticeCitation[] }
+export interface PracticeSetRead { id: string; workspace_id: string; course_id: string; lesson_id: string; lesson_version_id: string; output_language: "zh-CN" | "en"; difficulty: PracticeDifficulty; item_count: number; lifecycle_status: string; source_degraded: boolean; created_at: string; items: PracticeItemRead[] }
+export interface PracticeSetListItem { id: string; lesson_version_id: string; output_language: "zh-CN" | "en"; difficulty: PracticeDifficulty; item_count: number; lifecycle_status: string; source_degraded: boolean; created_at: string; latest_job: PracticeJobRead | null }
+export interface PracticeJobRead { id: string; job_type: "generate_set" | "grade_attempt"; practice_set_id: string | null; practice_attempt_id: string | null; status: string; attempt_count: number; error_code: string | null; error_message: string | null; created_at: string; updated_at: string }
+export interface PracticeFeedbackBlockRead { block_key: string; type: "explanation" | "improvement" | "reference" | "limitation"; text: string; citation_ids: string[]; option_key: string | null }
+export interface PracticeCriterionResultRead { criterion_key: string; met: "full" | "partial" | "none"; note: string }
+export interface PracticeFeedbackRead { verdict: "correct" | "partially_correct" | "incorrect" | "ungradable"; score: number | null; is_ai_graded: boolean; criterion_results: PracticeCriterionResultRead[]; feedback_blocks: PracticeFeedbackBlockRead[]; citations: PracticeCitation[] }
+export interface PracticeAttemptRead { id: string; practice_item_id: string; ordinal: number; item_type: PracticeItemType; status: string; option_key: string | null; text: string | null; practice_job_id: string | null; error_code: string | null; error_message: string | null; created_at: string; completed_at: string | null; feedback: PracticeFeedbackRead | null }
+
+export async function fetchPracticeSets(workspaceId: string, courseId: string, courseVersionId: string, lessonId: string, lessonVersionId: string): Promise<PracticeSetListItem[]> {
+  return request<PracticeSetListItem[]>(`/api/v1/workspaces/${workspaceId}/courses/${courseId}/versions/${courseVersionId}/lessons/${lessonId}/versions/${lessonVersionId}/practice-sets`);
+}
+
+export async function createPracticeSet(workspaceId: string, courseId: string, courseVersionId: string, lessonId: string, lessonVersionId: string, payload: { item_count: number; difficulty: PracticeDifficulty; output_language?: "zh-CN" | "en" }, idempotencyKey: string = crypto.randomUUID()): Promise<PracticeJobRead> {
+  return request<PracticeJobRead>(`/api/v1/workspaces/${workspaceId}/courses/${courseId}/versions/${courseVersionId}/lessons/${lessonId}/versions/${lessonVersionId}/practice-sets`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ ...payload, external_processing_ack: true }) });
+}
+
+export async function fetchPracticeSet(workspaceId: string, setId: string): Promise<PracticeSetRead> {
+  return request<PracticeSetRead>(`/api/v1/workspaces/${workspaceId}/practice-sets/${setId}`);
+}
+
+export async function deletePracticeSet(workspaceId: string, setId: string): Promise<void> {
+  await request<void>(`/api/v1/workspaces/${workspaceId}/practice-sets/${setId}`, { method: "DELETE" });
+}
+
+export async function fetchPracticeJob(workspaceId: string, jobId: string): Promise<PracticeJobRead> {
+  return request<PracticeJobRead>(`/api/v1/workspaces/${workspaceId}/practice-jobs/${jobId}`);
+}
+
+export async function cancelPracticeJob(workspaceId: string, jobId: string): Promise<PracticeJobRead> {
+  return request<PracticeJobRead>(`/api/v1/workspaces/${workspaceId}/practice-jobs/${jobId}/cancel`, { method: "POST" });
+}
+
+export async function retryPracticeJob(workspaceId: string, jobId: string): Promise<PracticeJobRead> {
+  return request<PracticeJobRead>(`/api/v1/workspaces/${workspaceId}/practice-jobs/${jobId}/retry`, { method: "POST" });
+}
+
+export async function submitPracticeAttempt(workspaceId: string, itemId: string, payload: { external_processing_ack: boolean; option_key?: string; text?: string }, idempotencyKey: string = crypto.randomUUID()): Promise<PracticeAttemptRead> {
+  return request<PracticeAttemptRead>(`/api/v1/workspaces/${workspaceId}/practice-items/${itemId}/attempts`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify(payload) });
+}
+
+export async function fetchPracticeAttempts(workspaceId: string, itemId: string): Promise<PracticeAttemptRead[]> {
+  return request<PracticeAttemptRead[]>(`/api/v1/workspaces/${workspaceId}/practice-items/${itemId}/attempts`);
+}
+
+export async function fetchPracticeAttempt(workspaceId: string, attemptId: string): Promise<PracticeAttemptRead> {
+  return request<PracticeAttemptRead>(`/api/v1/workspaces/${workspaceId}/practice-attempts/${attemptId}`);
+}
+
+export async function deletePracticeAttempt(workspaceId: string, attemptId: string): Promise<void> {
+  await request<void>(`/api/v1/workspaces/${workspaceId}/practice-attempts/${attemptId}`, { method: "DELETE" });
+}
+
 interface ApiErrorBody {
   detail?: string | Array<{ msg?: string }>;
 }
