@@ -65,8 +65,8 @@ def _gen_payload(item_count, language):
 
 def _artifact():
     return {"items": [
-        {"item_key": "q1", "item_type": "single_choice", "stem": "pick", "citation_ids": ["e1"], "options": [{"option_key": "a", "text": "A", "is_correct": True, "rationale": "r", "citation_ids": ["e1"]}, {"option_key": "b", "text": "B", "is_correct": False, "rationale": "r", "citation_ids": ["e1"]}]},
-        {"item_key": "q2", "item_type": "short_answer", "stem": "explain", "citation_ids": ["e1"], "rubric": [{"criterion_key": "c1", "description": "d", "weight": 100, "citation_ids": ["e1"]}], "reference_answer": "ref"},
+        {"target_key": "objective_1", "item_key": "q1", "item_type": "single_choice", "stem": "pick", "citation_ids": ["e1"], "options": [{"option_key": "a", "text": "A", "is_correct": True, "rationale": "r", "citation_ids": ["e1"]}, {"option_key": "b", "text": "B", "is_correct": False, "rationale": "r", "citation_ids": ["e1"]}]},
+        {"target_key": "objective_1", "item_key": "q2", "item_type": "short_answer", "stem": "explain", "citation_ids": ["e1"], "rubric": [{"criterion_key": "c1", "description": "d", "weight": 100, "citation_ids": ["e1"]}], "reference_answer": "ref"},
     ]}
 
 
@@ -141,7 +141,7 @@ def test_worker_failure_keeps_real_step_count(db_session: Session, monkeypatch) 
     monkeypatch.setattr(practice_generation, "retrieve", lambda *_a, **_k: ("t", [RetrievalResult(score=0.9, text=chunk.content, citation=CitationRead(document_id=doc.id, document_version_id=ver.id, chunk_id=chunk.id, document_name=doc.display_name, heading_path=[], start_offset=0, end_offset=5))]))
     # Plan + submit succeed (2 tool calls recorded), then artifact validation fails on unknown citation,
     # and repair is denied because provider call budget is still available but repair also invalid.
-    bad = {"items": [{"item_key": "q1", "item_type": "single_choice", "stem": "s", "citation_ids": ["eX"], "options": [{"option_key": "a", "text": "A", "is_correct": True, "rationale": "r", "citation_ids": ["eX"]}, {"option_key": "b", "text": "B", "is_correct": False, "rationale": "r", "citation_ids": ["eX"]}]}]}
+    bad = {"items": [{"target_key": "objective_1", "item_key": "q1", "item_type": "single_choice", "stem": "s", "citation_ids": ["eX"], "options": [{"option_key": "a", "text": "A", "is_correct": True, "rationale": "r", "citation_ids": ["eX"]}, {"option_key": "b", "text": "B", "is_correct": False, "rationale": "r", "citation_ids": ["eX"]}]}]}
     provider = iter([({"queries": ["q"]}, {"input_tokens": 1, "output_tokens": 1}), (bad, {"input_tokens": 1, "output_tokens": 1}), (bad, {"input_tokens": 1, "output_tokens": 1})])
     monkeypatch.setattr(practice_generation, "call_provider", lambda *_a, **_k: next(provider))
     monkeypatch.setattr(practice_workers, "SessionLocal", lambda: _SharedSession(db_session))

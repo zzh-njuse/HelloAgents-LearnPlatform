@@ -230,10 +230,24 @@ def _execute_lesson_generation(db: Session, settings: Settings, job: CourseGener
     def validate_unit(unit, generated: dict[str, Any]) -> LessonUnitArtifact:
         candidate = dict(generated)
         candidate["unit_key"] = unit.unit_key
+        allowed_citations = {item["citation_id"] for item in evidence_by_unit[unit.unit_key]}
+        grounded_blocks = []
+        for raw_block in candidate.get("blocks") or []:
+            block = dict(raw_block)
+            citations = [value for value in (block.get("citation_ids") or []) if value in allowed_citations]
+            block["citation_ids"] = citations
+            # Never fabricate a citation. Unsupported factual prose is omitted
+            # instead of invalidating an otherwise grounded lesson unit.
+            if block.get("type") != "heading" and not citations:
+                continue
+            grounded_blocks.append(block)
+        candidate["blocks"] = grounded_blocks
         artifact = LessonUnitArtifact.model_validate(candidate)
+        if not any(block.type != "heading" for block in artifact.blocks):
+            raise ValueError("unit_has_no_grounded_content")
         validate_citations(
             LessonDraftArtifact(title=request.lesson_title or request.title, learning_objectives=plan.learning_objectives, blocks=artifact.blocks),
-            {item["citation_id"] for item in evidence_by_unit[unit.unit_key]},
+            allowed_citations,
         )
         return artifact
 
@@ -279,20 +293,28 @@ def _execute_lesson_generation(db: Session, settings: Settings, job: CourseGener
             raise ValueError("invalid_agent_artifact") from exc
         if {unit.unit_key for unit in repaired.units} != requested:
             raise ValueError("invalid_agent_artifact")
-        replacements = {unit.unit_key: unit for unit in repaired.units}
+        unit_specs = {unit.unit_key: unit for unit in plan.units}
+        normalized_repairs: list[LessonUnitArtifact] = []
         for repaired_unit in repaired.units:
             try:
-                validate_citations(
-                    LessonDraftArtifact(title=request.lesson_title or request.title, learning_objectives=plan.learning_objectives, blocks=repaired_unit.blocks),
-                    {item["citation_id"] for item in evidence_by_unit[repaired_unit.unit_key]},
-                )
+                normalized_repairs.append(validate_unit(unit_specs[repaired_unit.unit_key], repaired_unit.model_dump()))
             except (ValidationError, ValueError) as exc:
                 raise ValueError("invalid_agent_artifact") from exc
+        replacements = {unit.unit_key: unit for unit in normalized_repairs}
         units = [replacements.get(unit.unit_key, unit) for unit in units]
         if not verify().complete:
             raise ValueError("lesson_coverage_incomplete")
 
-    blocks = [block for unit in units for block in unit.blocks]
+    # Units are authored independently and may reuse keys such as p1. Preserve
+    # stable keys when unique; namespace only collisions before the final merge.
+    seen_block_keys: set[str] = set()
+    blocks = []
+    for unit in units:
+        for index, block in enumerate(unit.blocks, 1):
+            if block.block_key in seen_block_keys:
+                block = block.model_copy(update={"block_key": f"{unit.unit_key[:30]}-{index}-{block.block_key[-60:]}"[:100]})
+            seen_block_keys.add(block.block_key)
+            blocks.append(block)
     try:
         artifact = LessonDraftArtifact(
             title=request.lesson_title or request.title,

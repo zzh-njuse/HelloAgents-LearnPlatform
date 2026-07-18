@@ -44,6 +44,26 @@ GRADEABLE_STATES = {"grading", "retry_wait", "queue_failed", "failed", "cancel_r
 SHORT_ANSWER_MAX_CHARS = 8000
 
 
+def _try_project_learning(db: Session, workspace_id: str, attempt: PracticeAttempt, feedback: PracticeFeedback, item: PracticeItem) -> None:
+    """Learning projection within the same transaction as Feedback.
+
+    Per ADR 003 §Transaction: Feedback, Learning Event, Signal and target
+    recompute must commit atomically. This is NOT best-effort — if projection
+    fails, the entire transaction (including Feedback) must roll back.
+    """
+    from learn_platform_api.services.learning import ensure_targets_for_lesson_version, ensure_item_target_mapping
+    from learn_platform_api.services.learning_projection import project_attempt_feedback
+    ps = db.get(PracticeSet, item.practice_set_id)
+    if ps is None:
+        return
+    lv = db.get(LessonVersion, ps.lesson_version_id)
+    if lv is None:
+        return
+    ensure_targets_for_lesson_version(db, workspace_id, ps.course_id, ps.course_version_id, ps.lesson_id, ps.lesson_version_id, lv.learning_objectives)
+    ensure_item_target_mapping(db, item)
+    project_attempt_feedback(db, workspace_id, attempt, feedback)
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -293,10 +313,13 @@ def _submit_single_choice(db: Session, workspace_id: str, item: PracticeItem, pa
     db.add(attempt)
     db.flush()
     feedback = _build_single_choice_feedback(item, payload.option_key)
-    db.add(PracticeFeedback(
+    fb = PracticeFeedback(
         practice_attempt_id=attempt.id, workspace_id=workspace_id, verdict=feedback["verdict"], score=feedback["score"],
         criterion_results=None, feedback_blocks=feedback["blocks"], is_ai_graded=0, created_at=_now(),
-    ))
+    )
+    db.add(fb)
+    db.flush()
+    _try_project_learning(db, workspace_id, attempt, fb, item)
     db.commit()
     db.refresh(attempt)
     return attempt
@@ -518,6 +541,13 @@ def cleanup_set(db: Session, set_id: str) -> bool:
         (PracticeJob.practice_set_id == set_id) | (PracticeJob.practice_attempt_id.in_(attempt_ids) if attempt_ids else False),
     )).all()]
     run_ids = [row[0] for row in db.execute(select(AgentRun.id).where(AgentRun.practice_job_id.in_(job_ids))).all()] if job_ids else []
+
+    # §4: Delete learning facts FIRST — learning_events FK to attempts/feedback.
+    affected_targets: set[str] = set()
+    from learn_platform_api.services.learning_projection import delete_set_learning_facts, _recompute_target
+    if item_ids:
+        affected_targets = delete_set_learning_facts(db, workspace_id, item_ids)
+
     _disconnect_practice_cycle(db, set_ids={set_id}, attempt_ids=attempt_ids, job_ids=job_ids)
     if run_ids:
         db.execute(delete(AgentToolCall).where(AgentToolCall.agent_run_id.in_(run_ids)))
@@ -533,6 +563,10 @@ def cleanup_set(db: Session, set_id: str) -> bool:
         db.execute(delete(PracticeJobSource).where(PracticeJobSource.practice_job_id.in_(job_ids)))
         db.execute(delete(PracticeJob).where(PracticeJob.id.in_(job_ids)))
     db.delete(practice_set)
+    db.flush()
+    # Deletion and projection remain atomic.
+    for tid in affected_targets:
+        _recompute_target(db, tid, workspace_id)
     db.commit()
     return True
 
@@ -546,6 +580,11 @@ def delete_attempt(db: Session, settings: Settings, workspace_id: str, attempt_i
     # worker cannot resurrect feedback for an attempt the user deleted.
     if grade_job_id:
         db.execute(update(PracticeJob).where(PracticeJob.id == grade_job_id, PracticeJob.status.in_(ACTIVE_JOB_STATUSES)).values(status="cancel_requested", lease_expires_at=None, next_attempt_at=None))
+    # §4: Delete learning facts FIRST — they have FKs to Attempt/Feedback.
+    affected_targets: set[str] = set()
+    from learn_platform_api.services.learning_projection import delete_attempt_learning_facts, _recompute_target
+    affected_targets = delete_attempt_learning_facts(db, workspace_id, attempt_id, None)
+    # Delete trace.
     run_ids = select(AgentRun.id).where(AgentRun.practice_job_id == grade_job_id) if grade_job_id else []
     if grade_job_id:
         db.execute(delete(AgentToolCall).where(AgentToolCall.agent_run_id.in_(run_ids)))
@@ -557,6 +596,10 @@ def delete_attempt(db: Session, settings: Settings, workspace_id: str, attempt_i
         db.execute(delete(PracticeJobSource).where(PracticeJobSource.practice_job_id == grade_job_id))
         db.execute(delete(PracticeJob).where(PracticeJob.id == grade_job_id))
     db.delete(attempt)
+    db.flush()
+    # Deletion and projection remain atomic.
+    for tid in affected_targets:
+        _recompute_target(db, tid, workspace_id)
     db.commit()
     return True
 

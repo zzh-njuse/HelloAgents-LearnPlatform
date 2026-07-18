@@ -1,14 +1,15 @@
-import { ArrowLeft, BookOpen, Check, ChevronLeft, ChevronRight, Expand, LoaderCircle, Play, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { ArrowLeft, BookOpen, Check, CheckCircle2, ChevronLeft, ChevronRight, Expand, LoaderCircle, Play, Plus, RefreshCw, RotateCcw, Sparkles, Trash2 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import {
   activateCourse, cancelCourseJob, Course, CourseDetail, CourseGenerationJob, CourseReader,
-  createCourse, deleteCourse, DocumentSummary, fetchCourse, fetchCourseJob, fetchCourseJobs, fetchCourseReader,
-  fetchCourses, generateLesson, LessonCitation, LessonVersion, publishLesson, regenerateCourseOutline, retryCourseJob
+  completeLesson, createCourse, deleteCourse, DocumentSummary, fetchCourse, fetchCourseJob, fetchCourseJobs, fetchCourseReader,
+  fetchCourses, fetchLearningState, fetchLessonCompletions, generateLesson, LearningStateRead, LessonCitation, LessonCompletion, LessonVersion, publishLesson, regenerateCourseOutline, retryCourseJob, undoLessonCompletion
 } from "../lib/api";
 import { TutorPanel } from "./TutorPanel";
 import { PracticePanel } from "./PracticePanel";
 import { PracticeHistoryPanel } from "./PracticeHistoryPanel";
+import type { ReviewStudyTarget } from "./ReviewMemoryPanel";
 
 const errorMessage = (value: unknown) => value instanceof Error ? value.message : String(value);
 const activeJob = (status: string) => ["queued", "running", "retry_wait", "cancel_requested"].includes(status);
@@ -43,10 +44,11 @@ function LessonContent({ version, compact = false }: { version: LessonVersion; c
   </div>;
 }
 
-export function CoursePanel({ workspaceId, documents }: { workspaceId: string; documents: DocumentSummary[] }) {
+export function CoursePanel({ workspaceId, documents, reviewTarget, onReviewTargetConsumed, onManageMemory }: { workspaceId: string; documents: DocumentSummary[]; reviewTarget?: ReviewStudyTarget | null; onReviewTargetConsumed?: () => void; onManageMemory?: () => void }) {
   const [courses, setCourses] = useState<Course[]>([]);
   const [detail, setDetail] = useState<CourseDetail | null>(null);
   const [reader, setReader] = useState<CourseReader | null>(null);
+  const [lessonCompletions, setLessonCompletions] = useState<Record<string, LessonCompletion>>({});
   const [jobs, setJobs] = useState<CourseGenerationJob[]>([]);
   const [title, setTitle] = useState("");
   const [goal, setGoal] = useState("");
@@ -60,6 +62,7 @@ export function CoursePanel({ workspaceId, documents }: { workspaceId: string; d
   const [rightView, setRightView] = useState<"tutor" | "history">("tutor");
   const [currentLessonId, setCurrentLessonId] = useState("");
   const [practiceSetId, setPracticeSetId] = useState("");
+  const [lessonLearningState, setLessonLearningState] = useState<LearningStateRead | null>(null);
   const mergeJob = useCallback((next: CourseGenerationJob) => {
     setJobs((current) => [next, ...current.filter((item) => item.id !== next.id)].slice(0, 20));
   }, []);
@@ -85,6 +88,27 @@ export function CoursePanel({ workspaceId, documents }: { workspaceId: string; d
     setDetail(null); setReader(null); setJobs([]); setSources([]); setError(null); setFocus(null); setSelectedLessonVersions({});
     void Promise.all([refreshCourses(), fetchCourseJobs(workspaceId).then(setJobs)]).catch((value) => setError(errorMessage(value)));
   }, [refreshCourses, workspaceId]);
+
+  useEffect(() => {
+    if (!reviewTarget) return;
+    let active = true;
+    void Promise.all([
+      fetchCourse(workspaceId, reviewTarget.courseId),
+      fetchCourseReader(workspaceId, reviewTarget.courseId),
+    ]).then(([nextDetail, nextReader]) => {
+      if (!active) return;
+      const lessonExists = nextReader.version.sections.some((section) => section.lessons.some((lesson) => lesson.id === reviewTarget.lessonId && lesson.published_version));
+      if (!lessonExists) throw new Error("对应课节当前不可阅读");
+      setDetail(nextDetail);
+      setReader(nextReader);
+      setCurrentLessonId(reviewTarget.lessonId);
+      setPracticeSetId(reviewTarget.setId ?? "");
+      setMiddleView(reviewTarget.mode);
+      setRightView(reviewTarget.mode === "practice" ? "history" : "tutor");
+      onReviewTargetConsumed?.();
+    }).catch((value) => { if (active) setError(errorMessage(value)); });
+    return () => { active = false; };
+  }, [onReviewTargetConsumed, reviewTarget, workspaceId]);
 
   useEffect(() => {
     if (!focus) return;
@@ -151,6 +175,26 @@ export function CoursePanel({ workspaceId, documents }: { workspaceId: string; d
     ? detail.versions.flatMap((courseVersion) => courseVersion.sections.flatMap((section) => section.lessons.map((lesson) => ({ courseVersion, lesson })))).find(({ lesson }) => lesson.id === focus.lessonId)
     : null;
   const readableLessons = reader?.version.sections.flatMap((section) => section.lessons).filter((lesson) => lesson.published_version) ?? [];
+
+  useEffect(() => {
+    if (!reader) { setLessonCompletions({}); return; }
+    void fetchLessonCompletions(workspaceId, reader.course.id).then((items) => setLessonCompletions(Object.fromEntries(items.map((item) => [item.lesson_version_id, item])))).catch((value) => setError(errorMessage(value)));
+  }, [reader, workspaceId]);
+
+  const toggleLessonCompletion = async (version: LessonVersion) => {
+    setBusy(true); setError(null);
+    try {
+      if (lessonCompletions[version.id]) {
+        await undoLessonCompletion(workspaceId, version.id);
+        setLessonCompletions((current) => { const next = { ...current }; delete next[version.id]; return next; });
+      } else {
+        const completion = await completeLesson(workspaceId, version.id);
+        setLessonCompletions((current) => ({ ...current, [version.id]: completion }));
+      }
+    } catch (value) { setError(errorMessage(value)); }
+    finally { setBusy(false); }
+  };
+  const hasOlderCompletion = (lessonId: string, versionId: string) => Object.values(lessonCompletions).some((item) => item.lesson_id === lessonId && item.lesson_version_id !== versionId);
   const focusedReaderIndex = focus?.mode === "reader" ? readableLessons.findIndex((lesson) => lesson.id === focus.lessonId) : -1;
   const focusedReaderLesson = focusedReaderIndex >= 0 ? readableLessons[focusedReaderIndex] : null;
   const activeCourseJobs = jobs.filter((job) => activeJob(job.status));
@@ -178,6 +222,13 @@ export function CoursePanel({ workspaceId, documents }: { workspaceId: string; d
     const el = document.getElementById(`lesson-article-${currentLessonId}`);
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [currentLessonId, middleView, reader]);
+
+  useEffect(() => {
+    if (!reader || !currentLessonId) { setLessonLearningState(null); return; }
+    void fetchLearningState(workspaceId, reader.course.id, currentLessonId)
+      .then(setLessonLearningState)
+      .catch((value) => { setLessonLearningState(null); setError(errorMessage(value)); });
+  }, [currentLessonId, reader, workspaceId]);
 
   return <section className="course-panel">
     <div className="section-heading"><div><span>课程</span><h2>章节化学习</h2></div><BookOpen /></div>
@@ -218,11 +269,12 @@ export function CoursePanel({ workspaceId, documents }: { workspaceId: string; d
 
           {reader ? <div className="reader-with-tutor"><div className="reader"><nav className="reader-directory" aria-label="课节目录">{reader.version.sections.map((section) => <div key={section.id}><strong>{section.title}</strong>{section.lessons.map((lesson) => <button className={lesson.id === currentLessonId && lesson.published_version ? "directory-lesson active" : "directory-lesson"} disabled={!lesson.published_version} key={lesson.id} onClick={() => lesson.published_version && setCurrentLessonId(lesson.id)} type="button">{lesson.title}</button>)}</div>)}</nav><main>
             <div className="reader-view-switch" role="tablist" aria-label="中间视图"><button className={middleView === "content" ? "active" : ""} onClick={() => setMiddleView("content")} role="tab" type="button">正文</button><button className={middleView === "practice" ? "active" : ""} onClick={() => setMiddleView("practice")} role="tab" type="button">练习</button></div>
-            <div className={middleView === "practice" ? "reader-content hidden" : "reader-content"}>{reader.version.sections.flatMap((section) => section.lessons).map((lesson) => <article id={`lesson-article-${lesson.id}`} key={lesson.id}><header className="reader-lesson-heading"><h4>{lesson.title}</h4>{lesson.published_version ? <button className="icon-button" onClick={() => setFocus({ mode: "reader", lessonId: lesson.id })} title="专注阅读" type="button"><Expand size={16} /></button> : null}</header>{lesson.published_version ? <LessonContent compact version={lesson.published_version} /> : <p className="muted">尚未发布</p>}</article>)}</div>
+            <div className={middleView === "practice" ? "reader-content hidden" : "reader-content"}>{reader.version.sections.flatMap((section) => section.lessons).map((lesson) => <article id={`lesson-article-${lesson.id}`} key={lesson.id}><header className="reader-lesson-heading"><h4>{lesson.title}</h4>{lesson.published_version ? <button className="icon-button" onClick={() => setFocus({ mode: "reader", lessonId: lesson.id })} title="专注阅读" type="button"><Expand size={16} /></button> : null}</header>{lesson.published_version ? <><LessonContent compact version={lesson.published_version} /><div className="lesson-completion"><button className={lessonCompletions[lesson.published_version.id] ? "secondary-button completed" : "primary-button"} disabled={busy} onClick={() => void toggleLessonCompletion(lesson.published_version!)} type="button">{lessonCompletions[lesson.published_version.id] ? <RotateCcw size={15} /> : <CheckCircle2 size={15} />}{lessonCompletions[lesson.published_version.id] ? "撤销学习完毕" : "学习完毕"}</button>{lessonCompletions[lesson.published_version.id] ? <small>完成于 {new Date(lessonCompletions[lesson.published_version.id].completed_at).toLocaleString("zh-CN")}</small> : hasOlderCompletion(lesson.id, lesson.published_version.id) ? <small className="completion-update">内容已更新，请重新确认已完成当前版本。</small> : null}</div></> : <p className="muted">尚未发布</p>}</article>)}</div>
             <div className={middleView === "content" ? "reader-practice hidden" : "reader-practice"}><PracticePanel reader={reader} workspaceId={workspaceId} lessonId={currentLessonId} onLessonId={setCurrentLessonId} setId={practiceSetId} onSetId={setPracticeSetId} /></div>
           </main></div><div className="reader-right">
+            {lessonLearningState ? <div className="reader-learning-summary"><strong>当前课节</strong><span>需要复习 {lessonLearningState.summary.needs_review ?? 0}</span><span>学习中 {lessonLearningState.summary.developing ?? 0}</span><span>较稳固 {lessonLearningState.summary.secure ?? 0}</span></div> : null}
             <div className="reader-view-switch" role="tablist" aria-label="右侧视图"><button className={rightView === "tutor" ? "active" : ""} onClick={() => setRightView("tutor")} role="tab" type="button">Tutor</button><button className={rightView === "history" ? "active" : ""} onClick={() => setRightView("history")} role="tab" type="button">练习记录</button></div>
-            <div className={rightView === "history" ? "hidden" : ""}><TutorPanel reader={reader} workspaceId={workspaceId} lessonId={currentLessonId} onLessonId={setCurrentLessonId} /></div>
+            <div className={rightView === "history" ? "hidden" : ""}><TutorPanel reader={reader} workspaceId={workspaceId} lessonId={currentLessonId} onLessonId={setCurrentLessonId} onManageMemory={onManageMemory} /></div>
             <div className={rightView === "tutor" ? "hidden" : ""}><PracticeHistoryPanel reader={reader} workspaceId={workspaceId} lessonId={currentLessonId} setId={practiceSetId} onSetId={setPracticeSetId} /></div>
           </div></div>
             : detail.versions.map((version, versionIndex) => <details className="outline" key={version.id} open={versionIndex === 0}>
@@ -245,6 +297,6 @@ export function CoursePanel({ workspaceId, documents }: { workspaceId: string; d
       </div>
     </div>
     {focus?.mode === "draft" && focusedDraft && focusedDraftLesson ? <div className="focus-page" role="dialog" aria-modal="true" aria-label="专注审阅课节草稿"><header><button className="secondary-button" onClick={() => setFocus(null)} type="button"><ArrowLeft size={17} />返回课程</button><div><span>草稿版本 {focusedDraft.version_number} · {focusedDraft.status}</span><h2>{focusedDraftLesson.lesson.title}</h2></div><div className="focus-actions">{focusedDraft.status === "draft" ? <button className="secondary-button" disabled={busy} onClick={() => void act(() => publishLesson(workspaceId, focusedDraftLesson.lesson.id, focusedDraft.id, focusedDraftLesson.lesson.current_published_version_id), detail!.course.id)} type="button"><Check size={16} />发布此版本</button> : null}<button className="primary-button" disabled={busy || focusedDraftLesson.courseVersion.source_degraded || jobs.some((job) => job.lesson_id === focusedDraftLesson.lesson.id && activeJob(job.status))} onClick={() => void setJobFrom(() => generateLesson(workspaceId, detail!.course.id, focusedDraftLesson.courseVersion.id, focusedDraftLesson.lesson.id, outputLanguage))} type="button"><RefreshCw size={16} />重新生成草稿</button></div></header><main><LessonContent version={focusedDraft} /></main></div> : null}
-    {focus?.mode === "reader" && focusedReaderLesson?.published_version ? <div className="focus-page" role="dialog" aria-modal="true" aria-label="专注阅读课节"><header><button className="secondary-button" onClick={() => setFocus(null)} type="button"><ArrowLeft size={17} />返回 Reader</button><div><span>已发布版本 {focusedReaderLesson.published_version.version_number}</span><h2>{focusedReaderLesson.title}</h2></div><div className="focus-actions"><button className="icon-button" disabled={focusedReaderIndex <= 0} onClick={() => setFocus({ mode: "reader", lessonId: readableLessons[focusedReaderIndex - 1].id })} title="上一课" type="button"><ChevronLeft size={18} /></button><button className="icon-button" disabled={focusedReaderIndex >= readableLessons.length - 1} onClick={() => setFocus({ mode: "reader", lessonId: readableLessons[focusedReaderIndex + 1].id })} title="下一课" type="button"><ChevronRight size={18} /></button></div></header><main><LessonContent version={focusedReaderLesson.published_version} /></main></div> : null}
+    {focus?.mode === "reader" && focusedReaderLesson?.published_version ? <div className="focus-page" role="dialog" aria-modal="true" aria-label="专注阅读课节"><header><button className="secondary-button" onClick={() => setFocus(null)} type="button"><ArrowLeft size={17} />返回 Reader</button><div><span>已发布版本 {focusedReaderLesson.published_version.version_number}</span><h2>{focusedReaderLesson.title}</h2></div><div className="focus-actions"><button className="icon-button" disabled={focusedReaderIndex <= 0} onClick={() => setFocus({ mode: "reader", lessonId: readableLessons[focusedReaderIndex - 1].id })} title="上一课" type="button"><ChevronLeft size={18} /></button><button className="icon-button" disabled={focusedReaderIndex >= readableLessons.length - 1} onClick={() => setFocus({ mode: "reader", lessonId: readableLessons[focusedReaderIndex + 1].id })} title="下一课" type="button"><ChevronRight size={18} /></button></div></header><main><LessonContent version={focusedReaderLesson.published_version} /><div className="lesson-completion focus-completion"><button className={lessonCompletions[focusedReaderLesson.published_version.id] ? "secondary-button completed" : "primary-button"} disabled={busy} onClick={() => void toggleLessonCompletion(focusedReaderLesson.published_version!)} type="button">{lessonCompletions[focusedReaderLesson.published_version.id] ? <RotateCcw size={16} /> : <CheckCircle2 size={16} />}{lessonCompletions[focusedReaderLesson.published_version.id] ? "撤销学习完毕" : "学习完毕"}</button>{lessonCompletions[focusedReaderLesson.published_version.id] ? <small>完成于 {new Date(lessonCompletions[focusedReaderLesson.published_version.id].completed_at).toLocaleString("zh-CN")}</small> : null}</div></main></div> : null}
   </section>;
 }

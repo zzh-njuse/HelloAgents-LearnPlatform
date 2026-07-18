@@ -31,6 +31,15 @@
     {"id": "language_consistency", "role": "cross", "behavior": "请求与评分语言一致", "gate": "hard", "risk": "语言漂移", "expects": "language_carried"},
     {"id": "privacy_trace_clean", "role": "practice", "behavior": "trace 不含答案/rubric", "gate": "hard", "risk": "敏感字段入 trace", "expects": "clean_trace"},
     {"id": "obs_generation", "role": "exercise_author", "behavior": "生成观察指标", "gate": "observational", "risk": "无普适阈值", "expects": "metrics_recorded"},
-    {"id": "obs_grading", "role": "answer_grader", "behavior": "评分观察指标", "gate": "observational", "risk": "无普适阈值", "expects": "metrics_recorded"}
+    {"id": "obs_grading", "role": "answer_grader", "behavior": "评分观察指标", "gate": "observational", "risk": "无普适阈值", "expects": "metrics_recorded"},
+    {"id": "lp_one_error_provisional", "role": "practice", "behavior": "一次错误仅 provisional", "gate": "hard", "risk": "单次污染", "expects": "provisional_no_memory"},
+    {"id": "lp_two_errors_confirmed_memory", "role": "practice", "behavior": "两次不同题错误确认 Weakness 并建 Memory", "gate": "hard", "risk": "确认条件不足", "expects": "confirmed_one_memory"},
+    {"id": "lp_idempotent_replay", "role": "practice", "behavior": "Feedback 重放不产生重复事件", "gate": "hard", "risk": "重复 event/signal", "expects": "no_duplicates"},
+    {"id": "lp_memory_suppression", "role": "practice", "behavior": "删除 Memory 后旧事件不复活", "gate": "hard", "risk": "旧证据复活", "expects": "suppressed"},
+    {"id": "lp_ungradable_no_signal", "role": "practice", "behavior": "ungradable 不产生 signal", "gate": "hard", "risk": "无效证据入 mastery", "expects": "no_signal"},
+    {"id": "lp_review_no_mastery", "role": "practice", "behavior": "标记已复习不提高 mastery", "gate": "hard", "risk": "操作等于验证", "expects": "band_unchanged"},
+    {"id": "lp_api_no_leak", "role": "practice", "behavior": "API 不泄露 projection_score/答案", "gate": "hard", "risk": "内部值公开", "expects": "safe_projection"},
+    {"id": "lp_policy_default_off", "role": "practice", "behavior": "Memory policy 默认关闭", "gate": "hard", "risk": "默认外发", "expects": "default_off"},
+    {"id": "obs_lp_coverage", "role": "practice", "behavior": "掌握度覆盖观察指标", "gate": "observational", "risk": "无普适阈值", "expects": "metrics_recorded"}
   ]
 }

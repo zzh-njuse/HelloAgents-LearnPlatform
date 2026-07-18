@@ -114,6 +114,7 @@ services:
         condition: service_healthy
 
   worker:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -163,6 +164,7 @@ services:
         condition: service_started
 
   practice-worker:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -210,6 +212,7 @@ services:
         condition: service_started
 
   reconciler:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: apps/api/Dockerfile

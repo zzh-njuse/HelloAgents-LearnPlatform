@@ -62,6 +62,8 @@ class TutorTurnRead(BaseModel):
     error_message: str | None
     created_at: str
     completed_at: str | None
+    memory_count: int = 0
+    completion_count: int = 0
 
 
 class TutorSessionRead(BaseModel):

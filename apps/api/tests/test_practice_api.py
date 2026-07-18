@@ -141,6 +141,14 @@ def test_short_answer_grading_ungradable_never_fixed_score(client: TestClient, d
     assert graded["status"] == "succeeded"
     assert graded["feedback"]["verdict"] == "ungradable" and graded["feedback"]["score"] is None
     assert graded["feedback"]["is_ai_graded"] is True
+    reference_blocks = [block for block in graded["feedback"]["feedback_blocks"] if block["type"] == "reference"]
+    assert reference_blocks == [{
+        "block_key": "approved_example_answer",
+        "type": "reference",
+        "text": "示例答案：It halves the interval.",
+        "citation_ids": ["e1"],
+        "option_key": None,
+    }]
     leaked = _collect_keys(graded) & PRACTICE_FORBIDDEN
     assert not leaked
 
@@ -171,8 +179,8 @@ def test_generation_success_and_workspace_isolation(client: TestClient, db_sessi
     monkeypatch.setattr(practice, "enqueue_practice_job", lambda *_a: None)
     monkeypatch.setattr(practice_generation, "retrieve", lambda *_a, **_k: ("t", [RetrievalResult(score=0.9, text=chunk.content, citation=CitationRead(document_id=document.id, document_version_id=docver.id, chunk_id=chunk.id, document_name=document.display_name, heading_path=[], start_offset=0, end_offset=len(chunk.content)))]))
     artifact = {"items": [
-        {"item_key": "q1", "item_type": "single_choice", "stem": "pick", "citation_ids": ["e1"], "options": [{"option_key": "a", "text": "A", "is_correct": True, "rationale": "r", "citation_ids": ["e1"]}, {"option_key": "b", "text": "B", "is_correct": False, "rationale": "r", "citation_ids": ["e1"]}]},
-        {"item_key": "q2", "item_type": "short_answer", "stem": "explain", "citation_ids": ["e1"], "rubric": [{"criterion_key": "c1", "description": "d", "weight": 100, "citation_ids": ["e1"]}], "reference_answer": "ref"},
+        {"target_key": "objective_1", "item_key": "q1", "item_type": "single_choice", "stem": "pick", "citation_ids": ["e1"], "options": [{"option_key": "a", "text": "A", "is_correct": True, "rationale": "r", "citation_ids": ["e1"]}, {"option_key": "b", "text": "B", "is_correct": False, "rationale": "r", "citation_ids": ["e1"]}]},
+        {"target_key": "objective_1", "item_key": "q2", "item_type": "short_answer", "stem": "explain", "citation_ids": ["e1"], "rubric": [{"criterion_key": "c1", "description": "d", "weight": 100, "citation_ids": ["e1"]}], "reference_answer": "ref"},
     ]}
     provider = iter([({"queries": ["q"]}, {"input_tokens": 2, "output_tokens": 2}), (artifact, {"input_tokens": 10, "output_tokens": 20})])
     monkeypatch.setattr(practice_generation, "call_provider", lambda *_a, **_k: next(provider))

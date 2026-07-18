@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from learn_platform_api import __version__
 from learn_platform_api.observability import RequestIdMiddleware, configure_logging
-from learn_platform_api.routers import agent_runs, courses, documents, health, practice, system, tutor, workspaces
+from learn_platform_api.routers import agent_runs, courses, documents, health, learning, practice, system, tutor, workspaces
 from learn_platform_api.settings import get_settings
 
 
@@ -30,6 +30,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_runs.router)
     app.include_router(tutor.router)
     app.include_router(practice.router)
+    app.include_router(learning.router)
 
     logging.getLogger("learn_platform_api").info(
         "application_started",

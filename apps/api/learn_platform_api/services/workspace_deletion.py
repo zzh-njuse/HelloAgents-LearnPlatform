@@ -12,7 +12,7 @@ from learn_platform_api.db.models import (
     DocumentChunk, DocumentParseReport, DocumentVersion, IngestionBatch,
     IngestionBatchItem, IngestionJob, Lesson, LessonCitation, LessonVersion,
     PracticeAttempt, PracticeFeedback, PracticeItem, PracticeItemCitation,
-    PracticeJob, PracticeJobSource, PracticeSet,
+    LearningProjectionJob, PracticeJob, PracticeJobSource, PracticeSet,
     RagAnswerTrace, RagQueryTrace, SourceDocument, TutorSession, TutorTurn,
     TutorTurnCitation, Workspace, WorkspaceDeletionJob,
 )
@@ -72,6 +72,7 @@ def create_deletion(
     db.execute(update(CourseGenerationJob).where(CourseGenerationJob.workspace_id == workspace_id, CourseGenerationJob.status.in_(ACTIVE_JOB_STATUSES)).values(status="cancel_requested", lease_expires_at=None, next_attempt_at=None))
     db.execute(update(TutorTurn).where(TutorTurn.workspace_id == workspace_id, TutorTurn.status.in_(ACTIVE_JOB_STATUSES)).values(status="cancel_requested", lease_expires_at=None, next_attempt_at=None))
     db.execute(update(PracticeJob).where(PracticeJob.workspace_id == workspace_id, PracticeJob.status.in_(ACTIVE_JOB_STATUSES)).values(status="cancel_requested", lease_expires_at=None, next_attempt_at=None))
+    db.execute(update(LearningProjectionJob).where(LearningProjectionJob.workspace_id == workspace_id, LearningProjectionJob.status.in_(ACTIVE_JOB_STATUSES)).values(status="cancel_requested", lease_expires_at=None, next_attempt_at=None))
     db.execute(update(IngestionBatchItem).where(IngestionBatchItem.batch_id.in_(select(IngestionBatch.id).where(IngestionBatch.workspace_id == workspace_id)), IngestionBatchItem.status.in_({"pending", "queued", "processing"})).values(status="cancel_requested"))
     job = WorkspaceDeletionJob(workspace_id=workspace_id, status="queued", idempotency_key=idempotency_key)
     db.add(job)
@@ -144,6 +145,11 @@ def _delete_database_rows(db: Session, workspace_id: str) -> None:
 
     db.execute(delete(AgentToolCall).where(AgentToolCall.agent_run_id.in_(run_ids)))
     db.execute(delete(AgentRun).where(AgentRun.workspace_id == workspace_id))
+    # §4: Learning derived facts reference practice items/sets/attempts; delete first.
+    # Must not swallow exceptions — a failed learning cleanup means the workspace
+    # deletion is incomplete and must not report success.
+    from learn_platform_api.services.learning_projection import hard_delete_workspace_learning
+    hard_delete_workspace_learning(db, workspace_id)
     # Practice derived facts reference courses/lessons/chunks; delete them first.
     db.execute(delete(PracticeFeedback).where(PracticeFeedback.workspace_id == workspace_id))
     db.execute(delete(PracticeAttempt).where(PracticeAttempt.workspace_id == workspace_id))

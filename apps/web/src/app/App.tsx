@@ -2,6 +2,7 @@ import {
   Activity,
   BookOpenCheck,
   BotMessageSquare,
+  Brain,
   CheckCircle2,
   Database,
   Trash2,
@@ -32,6 +33,7 @@ import {
   fetchDocumentCourseImpact,
   fetchIngestionJob,
   fetchReadiness,
+  fetchReviewItems,
   fetchSystemInfo,
   fetchWorkspaces,
   fetchWorkspaceDeletionImpact,
@@ -52,8 +54,9 @@ import {
 } from "../lib/api";
 import { CoursePanel } from "./CoursePanel";
 import { AgentRunsPanel } from "./AgentRunsPanel";
+import { ReviewMemoryPanel, ReviewStudyTarget } from "./ReviewMemoryPanel";
 
-type ViewMode = "learn" | "runs";
+type ViewMode = "learn" | "runs" | "review";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 
@@ -95,6 +98,8 @@ export function App() {
   const [deleteState, setDeleteState] = useState<LoadState>("idle");
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletionJob, setDeletionJob] = useState<WorkspaceDeletionJob | null>(null);
+  const [reviewDueCount, setReviewDueCount] = useState(0);
+  const [reviewStudyTarget, setReviewStudyTarget] = useState<ReviewStudyTarget | null>(null);
   const documentsRequest = useRef(0);
   const activeWorkspaceId = useRef<string | null>(null);
   const workspaceDeletionKey = useRef<string | null>(null);
@@ -104,6 +109,7 @@ export function App() {
     [selectedId, workspaces]
   );
   const materialBusy = materialOperationCount > 0;
+  const consumeReviewStudyTarget = useCallback(() => setReviewStudyTarget(null), []);
   const beginMaterialOperation = () => setMaterialOperationCount((count) => count + 1);
   const finishMaterialOperation = () => setMaterialOperationCount((count) => Math.max(0, count - 1));
   const addSelectedFiles = (files: File[]) => {
@@ -158,8 +164,16 @@ export function App() {
   }, [refresh]);
 
   useEffect(() => {
-    activeWorkspaceId.current = selectedWorkspace?.id ?? null;
-  }, [selectedWorkspace?.id]);
+    activeWorkspaceId.current = selectedId;
+    if (!selectedId) { setReviewDueCount(0); return; }
+    const controller = new AbortController();
+    void fetchReviewItems(selectedId, undefined, controller.signal)
+      .then((items) => setReviewDueCount(items.filter((item) => item.status === "due" || item.status === "reviewing").length))
+      .catch((error) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setLoadError(error instanceof Error ? error.message : "无法加载复习状态");
+      });
+    return () => controller.abort();
+  }, [selectedId]);
 
   const refreshDocuments = useCallback(async (signal?: AbortSignal) => {
     if (!selectedWorkspace) return;
@@ -528,6 +542,9 @@ export function App() {
             <button className={viewMode === "learn" ? "active" : ""} onClick={() => setViewMode("learn")} role="tab" type="button">
               <BookOpenCheck size={16} /><span>学习</span>
             </button>
+            <button className={viewMode === "review" ? "active" : ""} onClick={() => setViewMode("review")} role="tab" type="button">
+              <Brain size={16} /><span>今日复习 {reviewDueCount} 项</span>
+            </button>
             <button className={viewMode === "runs" ? "active" : ""} onClick={() => setViewMode("runs")} role="tab" type="button">
               <Activity size={16} /><span>运行记录</span>
             </button>
@@ -536,6 +553,10 @@ export function App() {
 
         {selectedWorkspace && viewMode === "runs" ? (
           <AgentRunsPanel key={selectedWorkspace.id} workspaceId={selectedWorkspace.id} />
+        ) : null}
+
+        {selectedWorkspace && viewMode === "review" ? (
+          <ReviewMemoryPanel key={selectedWorkspace.id} onBack={() => setViewMode("learn")} onStudy={(target) => { setReviewStudyTarget(target); setViewMode("learn"); }} workspaceId={selectedWorkspace.id} />
         ) : null}
 
         {(!selectedWorkspace || viewMode === "learn") ? (
@@ -674,7 +695,7 @@ export function App() {
             </form>
           </section>
         </div>
-        {selectedWorkspace ? <CoursePanel documents={documents} workspaceId={selectedWorkspace.id} /> : null}
+        {selectedWorkspace ? <CoursePanel documents={documents} onManageMemory={() => setViewMode("review")} onReviewTargetConsumed={consumeReviewStudyTarget} reviewTarget={reviewStudyTarget} workspaceId={selectedWorkspace.id} /> : null}
         </>
         ) : null}
       </main>

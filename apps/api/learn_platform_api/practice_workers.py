@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
 
-from learn_platform_api.db.models import AgentRun, PracticeAttempt, PracticeJob
+from learn_platform_api.db.models import AgentRun, PracticeAttempt, PracticeFeedback, PracticeItem, PracticeJob
 from learn_platform_api.db.session import SessionLocal
 from learn_platform_api.services.practice_generation import execute_generation, execute_grading
 from learn_platform_api.services.practice import cleanup_set
@@ -202,3 +202,108 @@ def run_practice_job(job_id: str) -> None:
 def cleanup_practice_set(set_id: str) -> None:
     with SessionLocal() as db:
         cleanup_set(db, set_id)
+
+
+def heartbeat_learning_job(job_id: str, worker_id: str, settings) -> bool:
+    from learn_platform_api.db.models import LearningProjectionJob
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as heartbeat_db:
+        updated = heartbeat_db.execute(update(LearningProjectionJob).where(
+            LearningProjectionJob.id == job_id,
+            LearningProjectionJob.status == "running",
+            LearningProjectionJob.worker_id == worker_id,
+        ).values(heartbeat_at=now, lease_expires_at=now + timedelta(seconds=settings.ingestion_lease_seconds))).rowcount
+        heartbeat_db.commit()
+        return bool(updated)
+
+
+@contextmanager
+def maintain_learning_lease(job_id: str, worker_id: str, settings):
+    stopped = threading.Event()
+    lost = threading.Event()
+
+    def loop() -> None:
+        while not stopped.wait(settings.ingestion_heartbeat_seconds):
+            try:
+                if not heartbeat_learning_job(job_id, worker_id, settings):
+                    lost.set()
+                    return
+            except Exception:
+                lost.set()
+                return
+
+    thread = threading.Thread(target=loop, name=f"learning-heartbeat-{job_id}", daemon=True)
+    thread.start()
+    try:
+        yield lost
+    finally:
+        stopped.set()
+        thread.join(timeout=5)
+
+
+def run_learning_recompute(job_id: str) -> None:
+    """Claim and run a workspace-wide learning projection recompute.
+
+    Reuses the practice queue; does not call provider. Token usage is null.
+    """
+    settings = get_settings()
+    with SessionLocal() as db:
+        from learn_platform_api.db.models import LearningMemoryPolicy, LearningProjectionJob, Workspace
+        from learn_platform_api.services.learning_projection import recompute_workspace
+        job = db.get(LearningProjectionJob, job_id)
+        if job is None or job.status not in {"queued", "retry_wait"}:
+            return
+        worker_id = f"{socket.gethostname()}:{threading.get_ident()}:{job_id}"
+        now = datetime.now(timezone.utc)
+        claimed = db.execute(update(LearningProjectionJob).where(
+            LearningProjectionJob.id == job_id,
+            (LearningProjectionJob.status == "queued") | ((LearningProjectionJob.status == "retry_wait") & LearningProjectionJob.next_attempt_at.is_not(None) & (LearningProjectionJob.next_attempt_at <= now)),
+        ).values(status="running", attempt_count=LearningProjectionJob.attempt_count + 1, worker_id=worker_id, heartbeat_at=now, lease_expires_at=now + timedelta(seconds=settings.ingestion_lease_seconds), next_attempt_at=None, error_code=None, error_message=None)).rowcount
+        db.commit()
+        if not claimed:
+            return
+        job = db.get(LearningProjectionJob, job_id)
+        try:
+            with maintain_learning_lease(job_id, worker_id, settings) as lease_lost:
+                recompute_workspace(db, job.workspace_id)
+                current = datetime.now(timezone.utc)
+                db.refresh(job)
+                workspace = db.get(Workspace, job.workspace_id)
+                policy = db.scalar(select(LearningMemoryPolicy).where(LearningMemoryPolicy.workspace_id == job.workspace_id))
+                current_policy_revision = policy.policy_revision if policy is not None else 0
+                if (
+                    lease_lost.is_set()
+                    or job.status != "running"
+                    or job.worker_id != worker_id
+                    or job.lease_expires_at is None
+                    or job.lease_expires_at <= current
+                    or workspace is None
+                    or workspace.lifecycle_status != "active"
+                    or current_policy_revision != job.policy_revision
+                ):
+                    raise RuntimeError("learning_recompute_authority_lost")
+                job.status = "succeeded"
+                job.completed_at = current
+                job.worker_id = None
+                job.heartbeat_at = None
+                job.lease_expires_at = None
+                db.commit()
+        except Exception:
+            logger.exception("learning_recompute_failed job_id=%s", job_id)
+            db.rollback()
+            job = db.get(LearningProjectionJob, job_id)
+            if job and job.worker_id == worker_id:
+                if job.status == "cancel_requested":
+                    job.status = "canceled"
+                    job.error_code = None
+                    job.error_message = None
+                else:
+                    job.status = "failed"
+                    job.error_code = "recompute_internal_error"
+                    job.error_message = "Learning recompute failed"
+                job.completed_at = datetime.now(timezone.utc)
+                job.worker_id = None
+                job.heartbeat_at = None
+                job.lease_expires_at = None
+                db.commit()
+                return

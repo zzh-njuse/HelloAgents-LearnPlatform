@@ -143,8 +143,9 @@ export interface CourseLesson { id: string; title: string; objective: string; cu
 export interface CourseVersion { id: string; version_number: number; status: string; title: string; summary: string | null; source_degraded: boolean; sections: { id: string; title: string; objective: string; lessons: CourseLesson[] }[] }
 export interface CourseDetail { course: Course; versions: CourseVersion[] }
 export interface CourseReader { course: Course; version: CourseVersion }
+export interface LessonCompletion { id: string; course_id: string; course_version_id: string; lesson_id: string; lesson_version_id: string; lesson_title: string; is_current_version: boolean; completed_at: string }
 export interface TutorCitation { citation_id: string; block_key: string; document_name: string; heading_path: string[]; start_offset: number; end_offset: number; page_start: number | null; page_end: number | null }
-export interface TutorTurn { id: string; session_id: string; ordinal: number; attempt_number: number; status: string; question: string; scope: "course" | "lesson"; section_id: string | null; lesson_id: string | null; lesson_version_id: string | null; answer_blocks: { block_key: string; type: string; text: string; citation_ids: string[] }[] | null; citations: TutorCitation[]; error_code: string | null; error_message: string | null; created_at: string; completed_at: string | null }
+export interface TutorTurn { id: string; session_id: string; ordinal: number; attempt_number: number; status: string; question: string; scope: "course" | "lesson"; section_id: string | null; lesson_id: string | null; lesson_version_id: string | null; answer_blocks: { block_key: string; type: string; text: string; citation_ids: string[] }[] | null; citations: TutorCitation[]; error_code: string | null; error_message: string | null; created_at: string; completed_at: string | null; memory_count: number; completion_count: number }
 export interface TutorSession { id: string; workspace_id: string; course_id: string; course_version_id: string; status: string; provider: string; model: string; created_at: string; turns: TutorTurn[] }
 
 export type AgentRunRole = "course_architect" | "lesson_writer" | "tutor";
@@ -341,6 +342,22 @@ export async function fetchCourseReader(workspaceId: string, courseId: string): 
   return request<CourseReader>(`/api/v1/workspaces/${workspaceId}/courses/${courseId}/reader`);
 }
 
+export async function fetchLessonCompletions(workspaceId: string, courseId: string): Promise<LessonCompletion[]> {
+  return request<LessonCompletion[]>(`/api/v1/workspaces/${workspaceId}/lesson-completions?course_id=${encodeURIComponent(courseId)}`);
+}
+
+export async function fetchWorkspaceLessonCompletions(workspaceId: string): Promise<LessonCompletion[]> {
+  return request<LessonCompletion[]>(`/api/v1/workspaces/${workspaceId}/lesson-completions`);
+}
+
+export async function completeLesson(workspaceId: string, lessonVersionId: string): Promise<LessonCompletion> {
+  return request<LessonCompletion>(`/api/v1/workspaces/${workspaceId}/lesson-versions/${lessonVersionId}/completion`, { method: "PUT" });
+}
+
+export async function undoLessonCompletion(workspaceId: string, lessonVersionId: string): Promise<void> {
+  await request<void>(`/api/v1/workspaces/${workspaceId}/lesson-versions/${lessonVersionId}/completion`, { method: "DELETE" });
+}
+
 export async function regenerateCourseOutline(workspaceId: string, courseId: string, documentIds: string[], outputLanguage: "zh-CN" | "en"): Promise<CourseGenerationJob> {
   return request<CourseGenerationJob>(`/api/v1/workspaces/${workspaceId}/courses/${courseId}/outline-generations`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify({ document_ids: documentIds, external_processing_ack: true, output_language: outputLanguage }) });
 }
@@ -353,8 +370,8 @@ export async function fetchTutorSessions(workspaceId: string, courseId: string, 
   return request<TutorSession[]>(`/api/v1/workspaces/${workspaceId}/courses/${courseId}/tutor-sessions?course_version_id=${encodeURIComponent(versionId)}`);
 }
 
-export async function createTutorSession(workspaceId: string, courseId: string, versionId: string): Promise<TutorSession> {
-  return request<TutorSession>(`/api/v1/workspaces/${workspaceId}/courses/${courseId}/tutor-sessions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ course_version_id: versionId, external_processing_ack: true }) });
+export async function createTutorSession(workspaceId: string, courseId: string, versionId: string, externalProcessingAck: boolean): Promise<TutorSession> {
+  return request<TutorSession>(`/api/v1/workspaces/${workspaceId}/courses/${courseId}/tutor-sessions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ course_version_id: versionId, external_processing_ack: externalProcessingAck }) });
 }
 
 export async function fetchTutorSession(workspaceId: string, sessionId: string): Promise<TutorSession> {
@@ -451,6 +468,83 @@ export async function fetchPracticeAttempt(workspaceId: string, attemptId: strin
 
 export async function deletePracticeAttempt(workspaceId: string, attemptId: string): Promise<void> {
   await request<void>(`/api/v1/workspaces/${workspaceId}/practice-attempts/${attemptId}`, { method: "DELETE" });
+}
+
+// Stage 4 Slice 2: Learning API types and functions
+export type MasteryBand = "insufficient" | "needs_review" | "developing" | "secure";
+export interface MasteryTargetRead {
+  target_id: string; target_title: string; target_key: string; band: MasteryBand;
+  evidence_count: number; distinct_set_count: number; deterministic_signal_count: number;
+  ai_signal_count: number; last_evidence_at: string | null; weakness_status: string | null;
+  review_status: string | null; course_id: string; lesson_id: string; source_degraded: boolean;
+}
+export interface LearningStateRead {
+  workspace_id: string; summary: Record<string, number>; targets: MasteryTargetRead[];
+}
+export interface ReviewItemRead {
+  id: string; target_id: string; target_key: string; target_title: string; weakness_status: string; status: string;
+  due_at: string | null; reopen_count: number; reason_snapshot: Record<string, unknown>;
+  course_id: string; lesson_id: string; lesson_title: string; source_attempt_id: string | null; source_set_id: string | null;
+  source_item_ordinal: number | null; source_is_ai: boolean | null; source_occurred_at: string | null; created_at: string; updated_at: string;
+}
+export interface LearningMemoryRead {
+  id: string; target_title: string; target_key: string; kind: string; status: string;
+  display_text: string; confirmed_at: string | null; last_supported_at: string | null;
+  source_count: number; course_id: string; lesson_id: string; lesson_title: string;
+  sources: { attempt_id: string; set_id: string; item_number: number; is_ai: boolean; occurred_at: string }[];
+}
+export interface LearningMemoryPolicyRead {
+  tutor_use_enabled: boolean; policy_revision: number; updated_at: string;
+}
+export interface LearningJobRead {
+  id: string; workspace_id: string; status: string; attempt_count: number;
+  error_code: string | null; error_message: string | null;
+  created_at: string; updated_at: string; completed_at: string | null;
+}
+
+export async function fetchLearningState(workspaceId: string, courseId?: string, lessonId?: string): Promise<LearningStateRead> {
+  const params = new URLSearchParams();
+  if (courseId) params.set("course_id", courseId);
+  if (lessonId) params.set("lesson_id", lessonId);
+  const q = params.size ? `?${params.toString()}` : "";
+  return request<LearningStateRead>(`/api/v1/workspaces/${workspaceId}/learning-state${q}`);
+}
+export async function fetchReviewItems(workspaceId: string, status?: string, signal?: AbortSignal): Promise<ReviewItemRead[]> {
+  const q = status ? `?status=${status}` : "";
+  return request<ReviewItemRead[]>(`/api/v1/workspaces/${workspaceId}/review-items${q}`, { signal });
+}
+export async function createReviewAction(workspaceId: string, reviewItemId: string, action: string, snoozeDays?: number): Promise<unknown> {
+  return request(`/api/v1/workspaces/${workspaceId}/review-items/${reviewItemId}/actions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, snooze_days: snoozeDays }) });
+}
+export async function fetchLearningMemories(workspaceId: string): Promise<LearningMemoryRead[]> {
+  return request<LearningMemoryRead[]>(`/api/v1/workspaces/${workspaceId}/learning-memories`);
+}
+export async function patchLearningMemory(workspaceId: string, memoryId: string, payload: { display_text?: string; action?: string }): Promise<unknown> {
+  return request(`/api/v1/workspaces/${workspaceId}/learning-memories/${memoryId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+export async function deleteLearningMemory(workspaceId: string, memoryId: string): Promise<void> {
+  await request<void>(`/api/v1/workspaces/${workspaceId}/learning-memories/${memoryId}`, { method: "DELETE" });
+}
+export async function fetchMemoryPolicy(workspaceId: string): Promise<LearningMemoryPolicyRead> {
+  return request<LearningMemoryPolicyRead>(`/api/v1/workspaces/${workspaceId}/learning-memory-policy`);
+}
+export async function patchMemoryPolicy(workspaceId: string, enabled: boolean): Promise<LearningMemoryPolicyRead> {
+  return request<LearningMemoryPolicyRead>(`/api/v1/workspaces/${workspaceId}/learning-memory-policy`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tutor_use_enabled: enabled }) });
+}
+export async function createRecomputeJob(workspaceId: string): Promise<LearningJobRead> {
+  return request<LearningJobRead>(`/api/v1/workspaces/${workspaceId}/learning-state/recompute`, {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+  });
+}
+export async function fetchLearningJob(workspaceId: string, jobId: string): Promise<LearningJobRead> {
+  return request<LearningJobRead>(`/api/v1/workspaces/${workspaceId}/learning-jobs/${jobId}`);
+}
+export async function cancelLearningJob(workspaceId: string, jobId: string): Promise<LearningJobRead> {
+  return request<LearningJobRead>(`/api/v1/workspaces/${workspaceId}/learning-jobs/${jobId}/cancel`, { method: "POST" });
+}
+export async function retryLearningJob(workspaceId: string, jobId: string): Promise<LearningJobRead> {
+  return request<LearningJobRead>(`/api/v1/workspaces/${workspaceId}/learning-jobs/${jobId}/retry`, { method: "POST" });
 }
 
 interface ApiErrorBody {

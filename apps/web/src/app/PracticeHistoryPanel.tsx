@@ -1,7 +1,7 @@
 import { History, LoaderCircle, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { CourseReader, deletePracticeAttempt, fetchPracticeAttempts, fetchPracticeSet, fetchPracticeSets, PracticeAttemptRead, PracticeSetListItem } from "../lib/api";
+import { CourseReader, deletePracticeAttempt, fetchPracticeAttempts, fetchPracticeSet, fetchPracticeSets, PracticeAttemptRead, PracticeSetListItem, PracticeSetRead } from "../lib/api";
 
 const errorMessage = (value: unknown) => (value instanceof Error ? value.message : String(value));
 const GRADE_ACTIVE = ["grading", "retry_wait", "queued", "running", "cancel_requested"];
@@ -21,6 +21,7 @@ export interface PracticeHistoryPanelProps {
 export function PracticeHistoryPanel({ workspaceId, reader, lessonId, setId, onSetId }: PracticeHistoryPanelProps) {
   const lessons = useMemo(() => reader.version.sections.flatMap((section) => section.lessons.filter((lesson) => lesson.published_version)), [reader]);
   const [sets, setSets] = useState<PracticeSetListItem[]>([]);
+  const [historicalSet, setHistoricalSet] = useState<PracticeSetRead | null>(null);
   const [attempts, setAttempts] = useState<Record<string, PracticeAttemptRead[]>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +34,15 @@ export function PracticeHistoryPanel({ workspaceId, reader, lessonId, setId, onS
     try {
       const list = await fetchPracticeSets(workspaceId, reader.course.id, reader.version.id, selectedLesson.id, lessonVersionId);
       setSets(list);
-      const keep = setId && list.some((item) => item.id === setId);
+      if (setId && !list.some((item) => item.id === setId)) {
+        const detail = await fetchPracticeSet(workspaceId, setId).catch(() => null);
+        if (detail && detail.lesson_id === selectedLesson.id && detail.lesson_version_id !== lessonVersionId) {
+          setHistoricalSet(detail);
+          return;
+        }
+      }
+      setHistoricalSet(null);
+      const keep = Boolean(setId && list.some((item) => item.id === setId));
       onSetId(keep ? setId : (list[0]?.id ?? ""));
     } catch (value) { setError(errorMessage(value)); }
   }, [workspaceId, reader.course.id, reader.version.id, selectedLesson, lessonVersionId, onSetId, setId]);
@@ -73,11 +82,13 @@ export function PracticeHistoryPanel({ workspaceId, reader, lessonId, setId, onS
   return <aside className="practice-history-panel" aria-label="练习记录">
     <header><span className="eyebrow">练习记录</span><h3><History size={18} />作答历史</h3></header>
     <div className="practice-history-context"><strong>{reader.course.title}</strong>{selectedLesson ? <small>{selectedLesson.title}</small> : null}</div>
-    {sets.length ? <select aria-label="练习集合记录" onChange={(event) => onSetId(event.target.value)} value={setId}>
+    {sets.length || historicalSet ? <select aria-label="练习集合记录" onChange={(event) => onSetId(event.target.value)} value={setId}>
+      {historicalSet ? <option value={historicalSet.id}>历史课节版本 · {new Date(historicalSet.created_at).toLocaleString("zh-CN")}</option> : null}
       {sets.map((item) => <option key={item.id} value={item.id}>{new Date(item.created_at).toLocaleString("zh-CN")} · {item.item_count} 题{item.source_degraded ? " · 来源已变化" : ""}</option>)}
     </select> : <p className="muted">该课节还没有练习集合。</p>}
+    {historicalSet ? <p className="practice-history-notice">正在查看旧课节版本的练习与作答记录。</p> : null}
     {degraded ? <p className="form-error">来源已变化：历史只读，不能作答、重做或重试评分。</p> : null}
-    {sets.length ? <p className="muted">已完成 {completed} 次 · 共 {allAttempts.length} 次作答</p> : null}
+    {sets.length || historicalSet ? <p className="muted">已完成 {completed} 次 · 共 {allAttempts.length} 次作答</p> : null}
     <div className="practice-history-list">
       {allAttempts.map((attempt) => (
         <article className="practice-history-item" key={attempt.id}>
@@ -87,7 +98,7 @@ export function PracticeHistoryPanel({ workspaceId, reader, lessonId, setId, onS
           <button className="icon-button" disabled={busy} onClick={() => void removeAttempt(attempt.id)} title="删除这次作答" type="button"><Trash2 size={14} /></button>
         </article>
       ))}
-      {allAttempts.length === 0 && sets.length ? <p className="muted">该集合还没有作答。</p> : null}
+      {allAttempts.length === 0 && (sets.length || historicalSet) ? <p className="muted">该集合还没有作答。</p> : null}
     </div>
     {error ? <p className="form-error" role="alert">{error}</p> : null}
   </aside>;

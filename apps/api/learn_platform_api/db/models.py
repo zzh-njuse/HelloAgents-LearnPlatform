@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base
@@ -612,3 +612,224 @@ class PracticeFeedback(Base):
     feedback_blocks: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
     is_ai_graded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+# --------------------------------------------------------------------------- #
+# Stage 4 Slice 2: Mastery, Review and Memory
+# --------------------------------------------------------------------------- #
+
+
+class LearningTarget(Base):
+    __tablename__ = "learning_targets"
+    __table_args__ = (UniqueConstraint("lesson_version_id", "target_key", name="uq_learning_targets_version_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id"), nullable=False)
+    course_version_id: Mapped[str] = mapped_column(ForeignKey("course_versions.id"), nullable=False)
+    lesson_id: Mapped[str] = mapped_column(ForeignKey("lessons.id"), nullable=False)
+    lesson_version_id: Mapped[str] = mapped_column(ForeignKey("lesson_versions.id"), index=True, nullable=False)
+    target_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # objective | lesson_overall
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class PracticeItemTarget(Base):
+    __tablename__ = "practice_item_targets"
+    __table_args__ = (UniqueConstraint("practice_item_id", "learning_target_id", "criterion_key", name="uq_practice_item_targets_item_target_criterion"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    practice_item_id: Mapped[str] = mapped_column(ForeignKey("practice_items.id"), index=True, nullable=False)
+    learning_target_id: Mapped[str] = mapped_column(ForeignKey("learning_targets.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    criterion_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class LearningEvent(Base):
+    __tablename__ = "learning_events"
+    __table_args__ = (UniqueConstraint("practice_feedback_id", name="uq_learning_events_feedback"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False)  # practice_result
+    practice_attempt_id: Mapped[str] = mapped_column(ForeignKey("practice_attempts.id"), index=True, nullable=False)
+    practice_feedback_id: Mapped[str] = mapped_column(ForeignKey("practice_feedback.id"), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class MasterySignal(Base):
+    __tablename__ = "mastery_signals"
+    __table_args__ = (UniqueConstraint("learning_event_id", "learning_target_id", name="uq_mastery_signals_event_target"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    learning_event_id: Mapped[str] = mapped_column(ForeignKey("learning_events.id"), index=True, nullable=False)
+    learning_target_id: Mapped[str] = mapped_column(ForeignKey("learning_targets.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    practice_item_id: Mapped[str] = mapped_column(ForeignKey("practice_items.id"), nullable=False)
+    practice_set_id: Mapped[str] = mapped_column(ForeignKey("practice_sets.id"), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(20), nullable=False)  # positive | partial | negative
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    weight: Mapped[float] = mapped_column(Float, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(30), nullable=False)  # single_choice | short_answer
+    is_ai_derived: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class MasteryState(Base):
+    __tablename__ = "mastery_states"
+    __table_args__ = (UniqueConstraint("learning_target_id", name="uq_mastery_states_target"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    learning_target_id: Mapped[str] = mapped_column(ForeignKey("learning_targets.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    band: Mapped[str] = mapped_column(String(20), nullable=False)  # insufficient | needs_review | developing | secure
+    evidence_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    distinct_set_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    projection_score: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
+    last_evidence_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(20), default="001", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class Weakness(Base):
+    __tablename__ = "weaknesses"
+    __table_args__ = (UniqueConstraint("learning_target_id", name="uq_weaknesses_target"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    learning_target_id: Mapped[str] = mapped_column(ForeignKey("learning_targets.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="provisional", nullable=False)  # provisional|confirmed|resolved|dismissed
+    reason_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    first_negative_event_id: Mapped[str | None] = mapped_column(ForeignKey("learning_events.id"), nullable=True)
+    last_negative_event_id: Mapped[str | None] = mapped_column(ForeignKey("learning_events.id"), nullable=True)
+    memory_suppressed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class ReviewItem(Base):
+    __tablename__ = "review_items"
+    __table_args__ = (UniqueConstraint("weakness_id", name="uq_review_items_weakness"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    weakness_id: Mapped[str] = mapped_column(ForeignKey("weaknesses.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="due", nullable=False)  # due|reviewing|awaiting_validation|snoozed|dismissed|resolved
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reopen_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reason_snapshot: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class ReviewAction(Base):
+    __tablename__ = "review_actions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    review_item_id: Mapped[str] = mapped_column(ForeignKey("review_items.id"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    action: Mapped[str] = mapped_column(String(30), nullable=False)  # reviewing|reviewed|snooze|dismiss|reopen
+    snooze_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class LearningProjectionJob(Base):
+    __tablename__ = "learning_projection_jobs"
+    __table_args__ = (UniqueConstraint("workspace_id", "idempotency_key", name="uq_learning_projection_jobs_workspace_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    worker_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class LearningMemory(Base):
+    __tablename__ = "learning_memories"
+    __table_args__ = (
+        Index(
+            "uq_learning_memories_current_target",
+            "learning_target_id",
+            unique=True,
+            postgresql_where=text("status <> 'archived'"),
+            sqlite_where=text("status <> 'archived'"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id"), nullable=False)
+    lesson_id: Mapped[str] = mapped_column(ForeignKey("lessons.id"), nullable=False)
+    lesson_version_id: Mapped[str] = mapped_column(ForeignKey("lesson_versions.id"), index=True, nullable=False)
+    learning_target_id: Mapped[str] = mapped_column(ForeignKey("learning_targets.id"), index=True, nullable=False)
+    weakness_id: Mapped[str | None] = mapped_column(ForeignKey("weaknesses.id", use_alter=True), nullable=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # weakness
+    status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)  # active|needs_review|paused|archived
+    display_text: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_supported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class LearningMemorySource(Base):
+    __tablename__ = "learning_memory_sources"
+    __table_args__ = (UniqueConstraint("learning_memory_id", "learning_event_id", name="uq_learning_memory_sources_memory_event"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    learning_memory_id: Mapped[str] = mapped_column(ForeignKey("learning_memories.id", ondelete="CASCADE"), index=True, nullable=False)
+    learning_event_id: Mapped[str] = mapped_column(ForeignKey("learning_events.id"), nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+
+
+class LearningMemoryRevision(Base):
+    __tablename__ = "learning_memory_revisions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    learning_memory_id: Mapped[str] = mapped_column(ForeignKey("learning_memories.id", ondelete="CASCADE"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(String(30), nullable=False)  # auto_created|edited|reconfirmed|paused|archived|conflicted
+    before_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    after_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class LearningMemoryPolicy(Base):
+    __tablename__ = "learning_memory_policies"
+    __table_args__ = (UniqueConstraint("workspace_id", name="uq_learning_memory_policies_workspace"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
+    tutor_use_enabled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    policy_revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class LessonCompletion(Base):
+    __tablename__ = "lesson_completions"
+    __table_args__ = (UniqueConstraint("workspace_id", "lesson_version_id", name="uq_lesson_completions_workspace_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True, nullable=False)
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True, nullable=False)
+    course_version_id: Mapped[str] = mapped_column(ForeignKey("course_versions.id", ondelete="CASCADE"), index=True, nullable=False)
+    lesson_id: Mapped[str] = mapped_column(ForeignKey("lessons.id", ondelete="CASCADE"), index=True, nullable=False)
+    lesson_version_id: Mapped[str] = mapped_column(ForeignKey("lesson_versions.id", ondelete="CASCADE"), index=True, nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

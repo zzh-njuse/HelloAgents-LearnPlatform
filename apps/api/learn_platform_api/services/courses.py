@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -207,6 +207,9 @@ def publish_lesson(db: Session, workspace_id: str, lesson_id: str, lesson_versio
     if lesson.current_published_version_id:
         db.execute(update(LessonVersion).where(LessonVersion.id == lesson.current_published_version_id, LessonVersion.status == "published").values(status="superseded"))
     version.status = "published"; version.published_at = datetime.now(timezone.utc); lesson.current_published_version_id = version.id
+    # Publishing a replacement invalidates memories grounded in the old lesson version.
+    from learn_platform_api.services.learning_projection import refresh_memory_eligibility
+    refresh_memory_eligibility(db, workspace_id)
     db.commit(); db.refresh(version)
     return version
 
@@ -288,7 +291,14 @@ def delete_course(db: Session, workspace_id: str, course_id: str) -> bool:
     db.execute(update(CourseGenerationJob).where(CourseGenerationJob.course_id == course.id, CourseGenerationJob.status.in_({"queued", "retry_wait"})).values(status="canceled"))
     db.execute(update(CourseGenerationJob).where(CourseGenerationJob.course_id == course.id, CourseGenerationJob.status == "running").values(status="cancel_requested"))
     db.commit()
-    # Clean practice derived facts owned by this course before returning.
+    # §4: Clean learning facts BEFORE scheduling practice set deletion.
+    # learning_events FK to practice_attempts/feedback which still exist here.
+    from learn_platform_api.services.learning_projection import delete_course_learning_facts
+    delete_course_learning_facts(db, workspace_id, course.id)
+    from learn_platform_api.db.models import LessonCompletion
+    db.execute(delete(LessonCompletion).where(LessonCompletion.workspace_id == workspace_id, LessonCompletion.course_id == course.id))
+    db.commit()
+    # Schedule practice set deletion (async cleanup).
     from learn_platform_api.settings import get_settings as _get_settings
     from learn_platform_api.services.practice import delete_sets_for_course
     delete_sets_for_course(db, _get_settings(), workspace_id, course.id)

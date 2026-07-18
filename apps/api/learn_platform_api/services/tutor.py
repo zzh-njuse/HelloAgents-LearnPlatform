@@ -86,7 +86,17 @@ def turn_detail(db: Session, turn: TutorTurn) -> dict:
     citations = []
     for citation, chunk, document in db.execute(select(TutorTurnCitation, DocumentChunk, SourceDocument).join(DocumentChunk, TutorTurnCitation.document_chunk_id == DocumentChunk.id).join(SourceDocument, TutorTurnCitation.document_id == SourceDocument.id).where(TutorTurnCitation.turn_id == turn.id)):
         citations.append({"citation_id": citation.citation_id, "block_key": citation.block_key, "document_id": citation.document_id, "document_version_id": citation.document_version_id, "chunk_id": chunk.id, "document_name": document.display_name, "heading_path": (chunk.heading_path or "").split(" / ") if chunk.heading_path else [], "start_offset": chunk.start_offset, "end_offset": chunk.end_offset, "page_start": chunk.page_start, "page_end": chunk.page_end})
-    return {"id": turn.id, "session_id": turn.session_id, "ordinal": turn.ordinal, "attempt_number": turn.attempt_number, "status": turn.status, "question": turn.question, "scope": turn.scope, "section_id": turn.section_id, "lesson_id": turn.lesson_id, "lesson_version_id": turn.lesson_version_id, "answer_blocks": turn.answer_blocks, "citations": citations, "error_code": turn.error_code, "error_message": turn.error_message, "created_at": turn.created_at.isoformat(), "completed_at": turn.completed_at.isoformat() if turn.completed_at else None}
+    memory_count = db.scalar(
+        select(AgentToolCall.result_count).join(AgentRun, AgentToolCall.agent_run_id == AgentRun.id)
+        .where(AgentRun.tutor_turn_id == turn.id, AgentToolCall.tool_name == "LearningMemoryContext")
+        .order_by(AgentToolCall.created_at.desc()).limit(1)
+    ) or 0
+    completion_count = db.scalar(
+        select(AgentToolCall.result_count).join(AgentRun, AgentToolCall.agent_run_id == AgentRun.id)
+        .where(AgentRun.tutor_turn_id == turn.id, AgentToolCall.tool_name == "LessonCompletionContext")
+        .order_by(AgentToolCall.created_at.desc()).limit(1)
+    ) or 0
+    return {"id": turn.id, "session_id": turn.session_id, "ordinal": turn.ordinal, "attempt_number": turn.attempt_number, "status": turn.status, "question": turn.question, "scope": turn.scope, "section_id": turn.section_id, "lesson_id": turn.lesson_id, "lesson_version_id": turn.lesson_version_id, "answer_blocks": turn.answer_blocks, "citations": citations, "error_code": turn.error_code, "error_message": turn.error_message, "created_at": turn.created_at.isoformat(), "completed_at": turn.completed_at.isoformat() if turn.completed_at else None, "memory_count": memory_count, "completion_count": completion_count}
 
 
 def cancel_turn(db: Session, workspace_id: str, turn_id: str) -> TutorTurn | None:

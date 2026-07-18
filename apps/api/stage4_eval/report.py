@@ -41,6 +41,9 @@ class PracticeObservation(_Strict):
     single_choice_count: int | None = Field(default=None, ge=0)
     short_answer_count: int | None = Field(default=None, ge=0)
     citation_coverage: float | None = Field(default=None, ge=0, le=1)
+    evidence_count: int | None = Field(default=None, ge=0)
+    signal_count: int | None = Field(default=None, ge=0)
+    negative_count: int | None = Field(default=None, ge=0)
     usage: UsageMetrics | None = None
 
 

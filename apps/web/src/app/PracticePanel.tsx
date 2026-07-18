@@ -96,13 +96,20 @@ export function PracticePanel({ workspaceId, reader, lessonId, onLessonId, setId
         const next = await fetchPracticeJob(workspaceId, genJob!.id);
         if (!active) return;
         setGenJob(next);
-        if (next.status === "succeeded") { await refreshSets(); }
+        if (next.status === "succeeded") {
+          await refreshSets();
+          if (next.practice_set_id) {
+            setCreatingNew(false);
+            onSetId(next.practice_set_id);
+            await openSet(next.practice_set_id);
+          }
+        }
         if (ACTIVE.includes(next.status)) timer = window.setTimeout(() => void poll(), 1500);
       } catch (value) { if (active) setError(errorMessage(value)); }
     };
     timer = window.setTimeout(() => void poll(), 1500);
     return () => { active = false; if (timer) window.clearTimeout(timer); };
-  }, [genJob, workspaceId, refreshSets]);
+  }, [genJob, workspaceId, refreshSets, onSetId, openSet]);
 
   const generate = async (event: FormEvent) => {
     event.preventDefault();
@@ -185,6 +192,7 @@ export function PracticePanel({ workspaceId, reader, lessonId, onLessonId, setId
   const currentSubmitted = Boolean(currentItem && attempts[currentItem.id]?.length);
   const pendingShortAnswer = items.some((item) => item.item_type === "short_answer" && !attempts[item.id]?.length && Boolean(drafts[item.id]?.text?.trim()));
   const sourceDegraded = selectedSet?.source_degraded ?? false;
+  const historicalSet = Boolean(selectedSet && selectedLesson && selectedSet.lesson_version_id !== selectedLesson.version.id);
   const readOnly = sourceDegraded; // source_degraded is fully read-only for practice
 
   return <section className="practice-panel" aria-label="课节练习">
@@ -214,9 +222,12 @@ export function PracticePanel({ workspaceId, reader, lessonId, onLessonId, setId
       {readOnly ? <p className="form-error">课程来源已变化：历史题目、作答与反馈仍可查看，但暂不能生成新练习。</p> : null}
     </form> : null}
 
-    {sets.length ? <div className="practice-set-toolbar"><label className="practice-set-picker"><span><ListChecks size={16} />练习记录</span><select aria-label="练习集合" onChange={(event) => { setCreatingNew(false); onSetId(event.target.value); }} value={selectedSet?.id ?? setId}>
+    {sets.length || selectedSet ? <div className="practice-set-toolbar"><label className="practice-set-picker"><span><ListChecks size={16} />练习记录</span><select aria-label="练习集合" onChange={(event) => { setCreatingNew(false); onSetId(event.target.value); }} value={selectedSet?.id ?? setId}>
+      {historicalSet && selectedSet ? <option value={selectedSet.id}>历史课节版本 · {new Date(selectedSet.created_at).toLocaleString("zh-CN")}</option> : null}
       {sets.map((item) => <option key={item.id} value={item.id}>{new Date(item.created_at).toLocaleString("zh-CN")} · {item.item_count} 题 · {item.difficulty === "easy" ? "基础" : item.difficulty === "hard" ? "挑战" : "标准"}{item.source_degraded ? " · 来源已变化" : ""}</option>)}
     </select></label><button className="secondary-button practice-new-button" disabled={busy || creatingNew} onClick={() => { setCreatingNew(true); setGenJob(null); setAck(false); }} type="button"><Plus size={15} />新建练习</button></div> : null}
+
+    {historicalSet ? <p className="practice-history-notice" role="status">这是旧课节版本的练习，仅供回看当时的题目、作答与反馈；新课节的练习记录不会包含它。</p> : null}
 
     {!creatingNew && selectedSet && currentItem ? <div className="practice-focus">
       <div className="practice-progress"><strong>第 {currentOrdinal + 1} / {items.length} 题</strong><small>{currentItem.item_type === "single_choice" ? "单选" : "简答"} · {selectedSet.difficulty === "easy" ? "基础" : selectedSet.difficulty === "hard" ? "挑战" : "标准"} · {selectedSet.output_language === "zh-CN" ? "简体中文" : "English"}</small>
@@ -244,7 +255,19 @@ export function PracticePanel({ workspaceId, reader, lessonId, onLessonId, setId
   </section>;
 }
 
-export function FeedbackView({ attempt }: { attempt: PracticeAttemptRead; workspaceId: string; citations: { citation_key: string; document_name: string; heading_path: string[]; page_start: number | null; page_end: number | null }[] }) {
+type FeedbackCitation = { citation_key: string; document_name: string; heading_path: string[]; page_start: number | null; page_end: number | null };
+
+const humanizeFeedbackText = (text: string, citations: FeedbackCitation[]) => {
+  let result = text;
+  for (const citation of citations) {
+    const location = [citation.document_name, ...citation.heading_path, pageLabel(citation.page_start, citation.page_end)].filter(Boolean).join(" > ") || "下方引用资料";
+    const escapedKey = citation.citation_key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    result = result.replace(new RegExp(`\\b${escapedKey}\\b`, "gi"), location);
+  }
+  return result.replace(/\be\d+\b/gi, "下方引用资料");
+};
+
+export function FeedbackView({ attempt, citations }: { attempt: PracticeAttemptRead; workspaceId: string; citations: FeedbackCitation[] }) {
   const feedback = attempt.feedback;
   if (!feedback) {
     if (GRADE_ACTIVE.includes(attempt.status)) {
@@ -256,8 +279,8 @@ export function FeedbackView({ attempt }: { attempt: PracticeAttemptRead; worksp
   const numbers = new Map(feedback.citations.map((citation, index) => [citation.citation_key, index + 1]));
   return <div className={`practice-feedback verdict-${feedback.verdict}`}>
     <div className="practice-feedback-head"><strong>{verdictLabel(feedback.verdict)}</strong>{feedback.score != null ? <span>{feedback.score} 分</span> : null}{feedback.is_ai_graded ? <small>AI 反馈</small> : null}</div>
-    {feedback.criterion_results.length ? <ul className="practice-rubric">{feedback.criterion_results.map((result) => <li key={result.criterion_key}><span>{result.met === "full" ? "✔" : result.met === "partial" ? "◑" : "✘"} {result.note}</span></li>)}</ul> : null}
-    {feedback.feedback_blocks.map((block) => <p className={`feedback-block ${block.type}`} key={block.block_key}>{block.text}{block.citation_ids.length ? <small className="citation-markers">{block.citation_ids.map((id) => numbers.has(id) ? <span key={id}>[{numbers.get(id)}]</span> : null)}</small> : null}</p>)}
+    {feedback.criterion_results.length ? <ul className="practice-rubric">{feedback.criterion_results.map((result) => <li key={result.criterion_key}><span>{result.met === "full" ? "✔" : result.met === "partial" ? "◑" : "✘"} {humanizeFeedbackText(result.note, citations)}</span></li>)}</ul> : null}
+    {feedback.feedback_blocks.map((block) => <p className={`feedback-block ${block.type}`} key={block.block_key}>{humanizeFeedbackText(block.text, citations)}{block.citation_ids.length ? <small className="citation-markers">{block.citation_ids.map((id) => numbers.has(id) ? <span key={id}>[{numbers.get(id)}]</span> : null)}</small> : null}</p>)}
     {feedback.citations.length ? <div className="citation-list">{feedback.citations.map((citation) => <div key={citation.citation_key}><strong>{numbers.get(citation.citation_key)}. {[citation.document_name, ...citation.heading_path, pageLabel(citation.page_start, citation.page_end)].filter(Boolean).join(" > ")}</strong>{!citation.available ? <small>来源已不可用</small> : null}</div>)}</div> : null}
   </div>;
 }

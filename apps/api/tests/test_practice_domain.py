@@ -28,6 +28,7 @@ from learn_platform_api.db.models import (
 def _single_choice(item_key="q1", citation="e1", correct="a"):
     return {
         "item_key": item_key,
+        "target_key": "objective_1",
         "item_type": "single_choice",
         "stem": "Which option is correct?",
         "citation_ids": [citation],
@@ -41,6 +42,7 @@ def _single_choice(item_key="q1", citation="e1", correct="a"):
 def _short_answer(item_key="q2", citation="e1"):
     return {
         "item_key": item_key,
+        "target_key": "objective_1",
         "item_type": "short_answer",
         "stem": "Explain the mechanism.",
         "citation_ids": [citation],

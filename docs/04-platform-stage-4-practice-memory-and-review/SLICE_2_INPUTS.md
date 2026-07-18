@@ -1,6 +1,6 @@
 # Stage 4 Slice 2 输入：掌握度、复习队列与可管理 Memory
 
-状态：Spec/ADR 分析输入；尚未批准实现
+状态：分析输入已归档；对应 Spec/ADR 已于 2026-07-17 通过人工 Gate
 
 日期：2026-07-17
 
@@ -17,7 +17,7 @@ Attempt / Feedback / Review completion
   -> Weakness
   -> Review Item
   -> 再次作答与重算
-  -> 可选 Memory 提升
+  -> confirmed Weakness 自动建立可管理 Memory
 ```
 
 ## 已有权威输入
@@ -57,9 +57,8 @@ Attempt / Feedback / Review completion
 - 不提前实现 Slice 3 Skill、Slice 4 MCP、认证、多租户 membership 或自主多 Agent。
 - Spec/ADR 和新页面概念未经人工 Gate，不生成 GLM 实现任务包。
 
-## 开始 Gate
+## Gate 结论
 
-- 人工接受 Mastery/Weakness/Review/Memory 的具体含义和用户可见性。
-- 人工接受抗单次污染、纠正、删除、重算和来源解释规则。
-- 人工接受 Memory 自动或手动提升策略及禁用行为。
-- 人工接受 schema、任务、预算、删除图、eval 和前端概念后，才能进入实现交接。
+- Mastery/Weakness/Review/Memory 的含义、用户可见性、抗单次污染、纠正、删除、重算和来源解释规则已获人工接受。
+- confirmed Weakness 自动、确定性建立 Memory；用户管理内容与生命周期，Tutor 外发由 Workspace 开关单独控制。
+- schema、任务、预算、删除图、eval 和前端概念已获人工接受，可以进入实现交接。

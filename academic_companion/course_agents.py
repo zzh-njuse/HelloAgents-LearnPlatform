@@ -4,7 +4,19 @@ from dataclasses import dataclass
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+def _decode_json_string(value: str) -> str:
+    result = value.strip()
+    if len(result) >= 2 and result.startswith('"') and result.endswith('"'):
+        try:
+            decoded = json.loads(result)
+            if isinstance(decoded, str):
+                result = decoded.strip()
+        except (TypeError, ValueError):
+            pass
+    return result
 
 
 class OutlineLesson(BaseModel):
@@ -32,6 +44,11 @@ class LessonBlock(BaseModel):
     text: str = Field(min_length=1, max_length=8000)
     citation_ids: list[str] = Field(default_factory=list, max_length=10)
 
+    @field_validator("text", mode="before")
+    @classmethod
+    def decode_text(cls, value: str) -> str:
+        return _decode_json_string(value)
+
     @model_validator(mode="after")
     def require_factual_citations(self) -> "LessonBlock":
         if self.type != "heading" and not self.citation_ids:
@@ -43,6 +60,16 @@ class LessonDraftArtifact(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     learning_objectives: list[str] = Field(min_length=1, max_length=10)
     blocks: list[LessonBlock] = Field(min_length=1, max_length=200)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def decode_title(cls, value: str) -> str:
+        return _decode_json_string(value)
+
+    @field_validator("learning_objectives", mode="before")
+    @classmethod
+    def decode_objectives(cls, value: list[str]) -> list[str]:
+        return [_decode_json_string(item) for item in value]
 
     @model_validator(mode="after")
     def unique_block_keys(self) -> "LessonDraftArtifact":
@@ -62,6 +89,11 @@ class LessonCoverageUnit(BaseModel):
 class LessonCoveragePlan(BaseModel):
     learning_objectives: list[str] = Field(min_length=1, max_length=10)
     units: list[LessonCoverageUnit] = Field(min_length=1, max_length=8)
+
+    @field_validator("learning_objectives", mode="before")
+    @classmethod
+    def decode_objectives(cls, value: list[str]) -> list[str]:
+        return [_decode_json_string(item) for item in value]
 
     @model_validator(mode="after")
     def unique_unit_keys(self) -> "LessonCoveragePlan":

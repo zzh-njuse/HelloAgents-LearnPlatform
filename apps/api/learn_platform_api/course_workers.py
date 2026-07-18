@@ -4,7 +4,7 @@ import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from learn_platform_api.db.session import SessionLocal
 from learn_platform_api.db.models import AgentRun, CourseGenerationJob
@@ -79,7 +79,17 @@ def run_course_generation_job(job_id: str) -> None:
             if job.status != "running":
                 return
             code = str(exc)
-            db.add(AgentRun(course_generation_job_id=job.id, workspace_id=job.workspace_id, role="course_architect" if job.job_type == "course_outline" else "lesson_writer", attempt_number=job.attempt_count, status="failed", step_count=0, error_code=code, completed_at=datetime.now(timezone.utc)))
+            run = db.scalar(select(AgentRun).where(
+                AgentRun.course_generation_job_id == job.id,
+                AgentRun.attempt_number == job.attempt_count,
+                AgentRun.status == "running",
+            ).order_by(AgentRun.created_at.desc()))
+            if run is None:
+                run = AgentRun(course_generation_job_id=job.id, workspace_id=job.workspace_id, role="course_architect" if job.job_type == "course_outline" else "lesson_writer", attempt_number=job.attempt_count, status="failed", step_count=0)
+                db.add(run)
+            run.status = "failed"
+            run.error_code = code
+            run.completed_at = datetime.now(timezone.utc)
             retryable = code in {"generation_provider_unavailable", "invalid_agent_artifact", "lesson_coverage_invalid"} and job.attempt_count < settings.ingestion_max_attempts
             job.status = "retry_wait" if retryable else ("canceled" if code == "generation_canceled" else "failed")
             job.error_code = code

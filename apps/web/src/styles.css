@@ -41,7 +41,7 @@ button { cursor: pointer; }
 .eyebrow { color: #55795b; font-size: 11px; font-weight: 800; text-transform: uppercase; }
 .icon-button { width: 40px; height: 40px; display: grid; place-items: center; color: #35423a; background: #fff; border: 1px solid #ced6cf; border-radius: 6px; }
 .icon-button:hover { border-color: #7c9981; color: #315d38; }
-.icon-button:focus-visible, .workspace-link:focus-visible, .primary-button:focus-visible, .secondary-button:focus-visible, .danger-button:focus-visible, .course-row:focus-visible, .scope-control button:focus-visible, .tutor-history footer button:focus-visible, .outline > summary:focus-visible, .lesson-draft > summary:focus-visible, .material-action-row input:focus-visible, .run-summary:focus-visible, .view-switch button:focus-visible { outline: 3px solid #315d38; outline-offset: 2px; }
+.icon-button:focus-visible, .workspace-link:focus-visible, .primary-button:focus-visible, .secondary-button:focus-visible, .danger-button:focus-visible, .course-row:focus-visible, .scope-control button:focus-visible, .tutor-history footer button:focus-visible, .outline > summary:focus-visible, .lesson-draft > summary:focus-visible, .material-action-row input:focus-visible, .run-summary:focus-visible, .view-switch button:focus-visible, .review-memory-tabs button:focus-visible, .reader-view-switch button:focus-visible, .directory-lesson:focus-visible, .review-queue-item:focus-visible { outline: 3px solid #315d38; outline-offset: 2px; }
 .icon-button:active, .secondary-button:active, .primary-button:active, .workspace-link:active { transform: translateY(1px); }
 .icon-button:disabled { cursor: default; opacity: .65; }
 .icon-button svg { width: 18px; height: 18px; }
@@ -410,3 +410,80 @@ button { cursor: pointer; }
 .directory-lesson:disabled { color: #9aa39c; cursor: default; }
 .practice-history-context { display: grid; gap: 2px; }
 .practice-history-context small { color: #657068; font-size: 11px; }
+
+/* Stage 4 Slice 2: Review & Memory */
+.review-memory-panel { display: grid; gap: 14px; padding: 4px 0; }
+.review-memory-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.review-memory-tabs { display: inline-flex; border: 1px solid #aeb9b0; border-radius: 6px; overflow: hidden; }
+.review-memory-tabs button { min-height: 38px; padding: 0 16px; color: #4d5c50; background: #fff; border: 0; font-size: 13px; font-weight: 700; }
+.review-memory-tabs button + button { border-left: 1px solid #aeb9b0; }
+.review-memory-tabs button.active { color: #244b2e; background: #e7f0e5; }
+.review-list, .memory-list { display: grid; gap: 10px; }
+.review-focus-grid { display: grid; grid-template-columns: minmax(210px, .8fr) minmax(320px, 1.4fr) minmax(240px, 1fr); gap: 12px; min-height: min(68vh, 760px); }
+.review-queue, .review-current, .review-evidence { min-width: 0; padding: 14px; border: 1px solid #d9dfda; background: #fff; overflow-wrap: anywhere; }
+.review-queue { display: grid; align-content: start; gap: 7px; overflow-y: auto; }
+.review-queue-item { width: 100%; padding: 10px; border: 1px solid transparent; border-radius: 5px; background: #f6f8f5; color: inherit; text-align: left; cursor: pointer; }
+.review-queue-item.active { border-color: #73967a; background: #e7f0e5; }
+.review-current h2 { margin: 5px 0 12px; font-size: 20px; letter-spacing: 0; }
+.review-evidence h3 { margin: 0 0 8px; font-size: 14px; letter-spacing: 0; }
+.review-evidence h3:not(:first-child) { margin-top: 20px; }
+.review-focus-grid > .mastery-summary { grid-column: 1 / -1; }
+.reader-learning-summary { display: flex; flex-wrap: wrap; gap: 6px 10px; padding: 9px 10px; border-bottom: 1px solid #d9dfda; color: #526056; font-size: 11px; }
+.reader-learning-summary strong { width: 100%; color: #28322a; font-size: 12px; }
+.tutor-memory-status { padding: 7px 9px; border: 1px solid #d9dfda; background: #f6f8f5; color: #526056; font-size: 11px; }
+.learning-job-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 8px 10px; border: 1px solid #d9dfda; background: #f6f8f5; font-size: 12px; }
+.review-card, .memory-card { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid #d9dfda; border-radius: 6px; background: #fff; }
+.review-card-head, .memory-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.review-card-head strong, .memory-card-head strong { font-size: 13px; color: #28322a; overflow-wrap: anywhere; }
+.review-status, .memory-status { min-width: 60px; text-align: right; font-size: 11px; font-weight: 800; color: #55795b; }
+.review-status.confirmed, .memory-status.active { color: #2f6840; }
+.review-status.provisional { color: #995f22; }
+.memory-status.paused, .memory-status.needs_review { color: #995f22; }
+.memory-status.archived { color: #95a399; }
+.review-card-meta, .memory-card-meta { display: flex; flex-wrap: wrap; gap: 10px; }
+.review-card-meta small, .memory-card-meta small { color: #657068; font-size: 11px; }
+.review-card-actions, .memory-card-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.memory-card-actions .icon-button { width: 30px; height: 30px; }
+.memory-text { margin: 0; color: #303830; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.memory-policy-row { padding: 10px 12px; border: 1px solid #e2e6e2; border-radius: 5px; background: #f7f9f6; }
+.memory-policy-row .source-choice { font-size: 12px; }
+.mastery-summary { display: grid; gap: 8px; padding: 12px; border: 1px solid #d9dfda; border-radius: 5px; background: #f7f9f6; }
+.mastery-bands { display: flex; flex-wrap: wrap; gap: 12px; }
+.mastery-bands span { font-size: 12px; font-weight: 700; }
+.band-insufficient { color: #95a399; }
+.band-needs_review { color: #9c3f35; }
+.band-developing { color: #995f22; }
+.band-secure { color: #2f6840; }
+
+.practice-history-notice {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-left: 3px solid #9a6b20;
+  background: #fff8e8;
+  color: #654710;
+  font-size: 13px;
+}
+
+.lesson-completion { display: flex; align-items: center; gap: 10px; justify-content: flex-end; margin-top: 14px; padding-top: 12px; border-top: 1px solid #d8dfd6; }
+.lesson-completion small { color: #617064; }
+.lesson-completion .completed { color: #2f6840; }
+.lesson-completion .completion-update { color: #8a5a16; }
+.memory-filter-row { display: flex; align-items: center; gap: 16px; padding: 8px 0; }
+.memory-filter-row label:first-child { display: flex; align-items: center; gap: 8px; }
+.completion-memory-section { padding: 10px 0 14px; border-bottom: 1px solid #d8dfd6; }
+.completion-memory-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto; gap: 12px; padding: 8px 0; border-top: 1px solid #e2e7e0; }
+.completion-memory-row span, .completion-memory-row small { color: #617064; }
+.focus-completion { margin-top: 28px; padding-bottom: 18px; }
+
+@media (max-width: 1099px) {
+  .review-focus-grid { grid-template-columns: minmax(190px, .7fr) minmax(320px, 1.3fr); }
+  .review-evidence { grid-column: 1 / -1; }
+}
+
+@media (max-width: 720px) {
+  .review-memory-header { flex-direction: column; align-items: stretch; }
+  .review-card-actions, .memory-card-actions { flex-direction: column; align-items: stretch; }
+  .review-focus-grid { grid-template-columns: 1fr; min-height: 0; }
+  .review-evidence { grid-column: auto; }
+  .review-queue { max-height: 34vh; }
+}

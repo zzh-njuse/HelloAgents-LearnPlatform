@@ -4,9 +4,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from learn_platform_api.db.models import CourseGenerationJob, IngestionJob, PracticeJob, PracticeSet, TutorSession, TutorTurn, WorkspaceDeletionJob
+from learn_platform_api.db.models import CourseGenerationJob, IngestionJob, LearningProjectionJob, PracticeJob, PracticeSet, TutorSession, TutorTurn, WorkspaceDeletionJob
 from learn_platform_api.services.batches import reconcile_stale_batches
-from learn_platform_api.services.queue import enqueue_course_generation_job, enqueue_ingestion_job, enqueue_practice_job, enqueue_practice_set_deletion, enqueue_tutor_session_deletion, enqueue_tutor_turn, enqueue_workspace_deletion_job
+from learn_platform_api.services.queue import enqueue_course_generation_job, enqueue_ingestion_job, enqueue_learning_recompute, enqueue_practice_job, enqueue_practice_set_deletion, enqueue_tutor_session_deletion, enqueue_tutor_turn, enqueue_workspace_deletion_job
 from learn_platform_api.settings import Settings
 
 logger = logging.getLogger("learn_platform_api.jobs")
@@ -131,6 +131,36 @@ def reconcile_jobs(db: Session, settings: Settings) -> int:
     if deletion_jobs:
         db.commit()
 
+    learning_jobs = list(db.scalars(select(LearningProjectionJob).where(
+        ((LearningProjectionJob.status == "running") & LearningProjectionJob.lease_expires_at.is_not(None) & (LearningProjectionJob.lease_expires_at < current))
+        | ((LearningProjectionJob.status == "retry_wait") & LearningProjectionJob.next_attempt_at.is_not(None) & (LearningProjectionJob.next_attempt_at <= current))
+        | ((LearningProjectionJob.status == "queued") & (LearningProjectionJob.updated_at < stale_before))
+    ).with_for_update(skip_locked=True)))
+    for job in learning_jobs:
+        job.status = "queued"; job.worker_id = None; job.lease_expires_at = None; job.next_attempt_at = None; job.updated_at = current
+    if learning_jobs:
+        db.commit()
+
+    canceled_learning_jobs = list(db.scalars(select(LearningProjectionJob).where(
+        LearningProjectionJob.status == "cancel_requested",
+        (LearningProjectionJob.lease_expires_at.is_(None)) | (LearningProjectionJob.lease_expires_at < current),
+    ).with_for_update(skip_locked=True)))
+    for job in canceled_learning_jobs:
+        job.status = "canceled"
+        job.worker_id = None
+        job.heartbeat_at = None
+        job.lease_expires_at = None
+        job.next_attempt_at = None
+        job.completed_at = current
+    if canceled_learning_jobs:
+        db.commit()
+    for job in learning_jobs:
+        try: enqueue_learning_recompute(settings, job.id)
+        except Exception:
+            logger.exception("learning_reconcile_enqueue_failed job_id=%s", job.id); job.status = "queue_failed"; job.error_code = "queue_unavailable"
+    if learning_jobs:
+        db.commit()
+
     if ingestion_jobs or stale_batches:
         logger.info("ingestion_reconciled recovered_jobs=%s reconciled_batches=%s", len(ingestion_jobs), stale_batches)
-    return len(ingestion_jobs) + len(course_jobs) + len(canceled_course_jobs) + len(tutor_turns) + len(deleting_sessions) + len(practice_jobs) + len(canceled_practice_jobs) + len(deleting_sets) + len(deletion_jobs) + stale_batches
+    return len(ingestion_jobs) + len(course_jobs) + len(canceled_course_jobs) + len(tutor_turns) + len(deleting_sessions) + len(practice_jobs) + len(canceled_practice_jobs) + len(deleting_sets) + len(learning_jobs) + len(canceled_learning_jobs) + len(deletion_jobs) + stale_batches

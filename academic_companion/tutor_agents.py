@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 class TutorAnswerBlock(BaseModel):
     block_key: str = Field(pattern=r"^[A-Za-z0-9_-]{1,100}$")
-    type: Literal["explanation", "example", "check_question", "limitation"]
+    type: Literal["explanation", "example", "check_question", "limitation", "memory_summary"]
     text: str = Field(min_length=1, max_length=8000)
     citation_ids: list[str] = Field(default_factory=list, max_length=10)
 

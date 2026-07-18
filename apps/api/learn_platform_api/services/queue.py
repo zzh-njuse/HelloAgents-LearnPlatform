@@ -80,3 +80,13 @@ def enqueue_practice_set_deletion(settings: Settings, set_id: str) -> None:
         )
     finally:
         connection.close()
+
+
+def enqueue_learning_recompute(settings: Settings, job_id: str) -> None:
+    connection = Redis.from_url(settings.redis_url)
+    try:
+        Queue(settings.practice_queue_name, connection=connection).enqueue(
+            "learn_platform_api.practice_workers.run_learning_recompute", job_id
+        )
+    finally:
+        connection.close()

@@ -49,8 +49,8 @@ def _ev(chunk, doc, ver):
 
 def _artifact():
     return {"items": [
-        {"item_key": "q1", "item_type": "single_choice", "stem": "s", "citation_ids": ["e1"], "options": [{"option_key": "a", "text": "A", "is_correct": True, "rationale": "r", "citation_ids": ["e1"]}, {"option_key": "b", "text": "B", "is_correct": False, "rationale": "r", "citation_ids": ["e1"]}]},
-        {"item_key": "q2", "item_type": "short_answer", "stem": "s", "citation_ids": ["e1"], "rubric": [{"criterion_key": "c1", "description": "d", "weight": 100, "citation_ids": ["e1"]}], "reference_answer": "r"},
+        {"target_key": "objective_1", "item_key": "q1", "item_type": "single_choice", "stem": "s", "citation_ids": ["e1"], "options": [{"option_key": "a", "text": "A", "is_correct": True, "rationale": "r", "citation_ids": ["e1"]}, {"option_key": "b", "text": "B", "is_correct": False, "rationale": "r", "citation_ids": ["e1"]}]},
+        {"target_key": "objective_1", "item_key": "q2", "item_type": "short_answer", "stem": "s", "citation_ids": ["e1"], "rubric": [{"criterion_key": "c1", "description": "d", "weight": 100, "citation_ids": ["e1"]}], "reference_answer": "r"},
     ]}
 
 

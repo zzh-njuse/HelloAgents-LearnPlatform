@@ -20,7 +20,7 @@
 - 非平凡产品编码默认按 `docs/GLM_IMPLEMENTATION_HANDOFF_WORKFLOW.md` 交给 GLM 实现；Codex 负责需求、Spec/ADR、任务包、独立验收、OCR 和收尾。该文档是 Playbook 的实现交接补充，开始生成任务包或接回 GLM 改动前必须读取。
 - 根 `AGENTS.md` 定义仓库级边界和强制门禁，Playbook 细化具体交互与执行流程。若两者的命令、参数、确认点或流程描述看似不一致，必须在执行前明确指出并请求人工确认，不得自行选择、合并或忽略其中一份。
 - 再读取当前 Stage 的 README、Spec、ADR、review 和阶段总结。
-- Stage 3 与 Stage 4 Slice 1 已完成；当前文档准备阶段是 Stage 4 Slice 2，入口为 `docs/04-platform-stage-4-practice-memory-and-review/SLICE_2_INPUTS.md`。
+- Stage 3 与 Stage 4 Slice 1/2 已完成；当前进入 Stage 4 Slice 3 教学 Skill 的事实盘点与 Spec/ADR 准备，入口为 `docs/04-platform-stage-4-practice-memory-and-review/SLICE_3_INPUTS.md`。
 - 先检查 `git status --short --branch`，保留用户和其他 Agent 的未知改动。
 
 ## Stage 与文档门禁
@@ -56,6 +56,7 @@
 ## 实现与验证
 
 - 优先小而可审查的 diff，不混合功能、重构、格式化和文档清理。
+- 禁止根据人工 smoke 中出现的某个固定问题、关键词或预期答案增加硬编码意图识别、专用输出或测试专用捷径。修复必须落在通用产品合同、状态机或验证边界上，并至少覆盖同类输入变体与不应触发的反例；确需领域专用能力时，必须先进入 Spec/ADR 和人工 Gate。
 - 改变公开行为时同步更新测试和文档。
 - Python framework/domain 目标基线：`python -m pytest -q`。
 - Web prototype：

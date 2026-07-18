@@ -33,7 +33,8 @@ from learn_platform_api.db.base import Base  # noqa: E402
 from learn_platform_api.db.models import (  # noqa: E402
     AgentRun, AgentToolCall, Course, CourseSection, CourseVersion, CourseVersionSource,
     DocumentChunk, DocumentVersion, Lesson, LessonVersion, PracticeAttempt, PracticeFeedback,
-    PracticeItem, PracticeItemCitation, PracticeJob, PracticeJobSource, PracticeSet, SourceDocument, Workspace,
+    PracticeItem, PracticeItemCitation, PracticeItemTarget, PracticeJob, PracticeJobSource, PracticeSet, SourceDocument, Workspace,
+    LearningEvent, LearningMemory, LearningTarget, MasterySignal, MasteryState, ReviewItem, Weakness,
 )
 from learn_platform_api.schemas.documents import CitationRead, RetrievalResult  # noqa: E402
 from learn_platform_api.services import practice, practice_generation  # noqa: E402
@@ -151,9 +152,9 @@ def _run_grade(db, settings, job):
 def _artifact(types=("single", "short"), citation="e1"):
     items = []
     if "single" in types:
-        items.append({"item_key": "q1", "item_type": "single_choice", "stem": "pick", "citation_ids": [citation], "options": [{"option_key": "a", "text": "A", "is_correct": True, "rationale": "r", "citation_ids": [citation]}, {"option_key": "b", "text": "B", "is_correct": False, "rationale": "r", "citation_ids": [citation]}]})
+        items.append({"target_key": "objective_1", "item_key": "q1", "item_type": "single_choice", "stem": "pick", "citation_ids": [citation], "options": [{"option_key": "a", "text": "A", "is_correct": True, "rationale": "r", "citation_ids": [citation]}, {"option_key": "b", "text": "B", "is_correct": False, "rationale": "r", "citation_ids": [citation]}]})
     if "short" in types:
-        items.append({"item_key": "q2", "item_type": "short_answer", "stem": "explain", "citation_ids": [citation], "rubric": [{"criterion_key": "c1", "description": "d", "weight": 100, "citation_ids": [citation]}], "reference_answer": "ref"})
+        items.append({"target_key": "objective_1", "item_key": "q2", "item_type": "short_answer", "stem": "explain", "citation_ids": [citation], "rubric": [{"criterion_key": "c1", "description": "d", "weight": 100, "citation_ids": [citation]}], "reference_answer": "ref"})
     return {"items": items}
 
 
@@ -221,12 +222,12 @@ def probe_gen_no_evidence():
 
 
 def probe_gen_unknown_citation():
-    bad = {"items": [{"item_key": "q1", "item_type": "single_choice", "stem": "s", "citation_ids": ["eX"], "options": [{"option_key": "a", "text": "A", "is_correct": True, "rationale": "r", "citation_ids": ["eX"]}, {"option_key": "b", "text": "B", "is_correct": False, "rationale": "r", "citation_ids": ["eX"]}]}]}
+    bad = {"items": [{"target_key": "objective_1", "item_key": "q1", "item_type": "single_choice", "stem": "s", "citation_ids": ["eX"], "options": [{"option_key": "a", "text": "A", "is_correct": True, "rationale": "r", "citation_ids": ["eX"]}, {"option_key": "b", "text": "B", "is_correct": False, "rationale": "r", "citation_ids": ["eX"]}]}]}
     _gen_no_commit([({"queries": ["q"]}, {"input_tokens": 1, "output_tokens": 1}), (bad, {"input_tokens": 5, "output_tokens": 5}), (bad, {"input_tokens": 5, "output_tokens": 5})], item_count=1)
 
 
 def probe_gen_invalid_rubric():
-    bad = {"items": [{"item_key": "q1", "item_type": "short_answer", "stem": "s", "citation_ids": ["e1"], "rubric": [{"criterion_key": "c1", "description": "d", "weight": 40, "citation_ids": ["e1"]}], "reference_answer": "r"}]}
+    bad = {"items": [{"target_key": "objective_1", "item_key": "q1", "item_type": "short_answer", "stem": "s", "citation_ids": ["e1"], "rubric": [{"criterion_key": "c1", "description": "d", "weight": 40, "citation_ids": ["e1"]}], "reference_answer": "r"}]}
     _gen_no_commit([({"queries": ["q"]}, {"input_tokens": 1, "output_tokens": 1}), (bad, {"input_tokens": 5, "output_tokens": 5}), (bad, {"input_tokens": 5, "output_tokens": 5})], item_count=1)
 
 
@@ -275,7 +276,7 @@ def probe_gen_multi_search_distinct_keys():
         return "t", [RetrievalResult(score=0.9, text=target.content, citation=CitationRead(document_id=document.id, document_version_id=version.id, chunk_id=target.id, document_name=document.display_name, heading_path=[], start_offset=0, end_offset=len(target.content)))]
 
     artifact = {"items": [
-        {"item_key": "q1", "item_type": "single_choice", "stem": "Which halves?", "citation_ids": ["e1"], "options": [{"option_key": "a", "text": "Binary search", "is_correct": True, "rationale": "r", "citation_ids": ["e1"]}, {"option_key": "b", "text": "Linear scan", "is_correct": False, "rationale": "r", "citation_ids": ["e2"]}]},
+        {"target_key": "objective_1", "item_key": "q1", "item_type": "single_choice", "stem": "Which halves?", "citation_ids": ["e1"], "options": [{"option_key": "a", "text": "Binary search", "is_correct": True, "rationale": "r", "citation_ids": ["e1"]}, {"option_key": "b", "text": "Linear scan", "is_correct": False, "rationale": "r", "citation_ids": ["e2"]}]},
     ]}
     provider = iter([({"queries": ["halves", "linear scan"]}, {"input_tokens": 2, "output_tokens": 2}), (artifact, {"input_tokens": 10, "output_tokens": 20})])
     with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", fake_retrieve), (practice_generation, "call_provider", lambda *_a, **_k: next(provider))):
@@ -580,6 +581,151 @@ def probe_obs_grading():
     return {"items": 1, "single_choice_count": 0, "short_answer_count": 1, "citation_coverage": 1.0, "usage": eval_metrics.usage_summary(input_tokens=5, output_tokens=5, provider_calls=1)}
 
 
+# --------------------------------------------------------------------------- #
+# Slice 2: Learning projection probes
+# --------------------------------------------------------------------------- #
+
+def _lp_seed(db):
+    """Seed reader fixture + learning target + practice set with two items."""
+    ws, course, cv, lesson, lv, chunk, document, version = _reader(db)
+    from learn_platform_api.db.models import LearningTarget
+    target = LearningTarget(workspace_id=ws.id, course_id=course.id, course_version_id=cv.id, lesson_id=lesson.id, lesson_version_id=lv.id, target_key="lesson_overall", title="Lesson", kind="lesson_overall")
+    db.add(target); db.flush(); db.commit()
+    practice_set = _add(db, PracticeSet(workspace_id=ws.id, course_id=course.id, course_version_id=cv.id, lesson_id=lesson.id, lesson_version_id=lv.id, output_language="zh-CN", difficulty="standard", item_count=2, generation_config={}, lifecycle_status="active"))
+    i1 = _add(db, PracticeItem(practice_set_id=practice_set.id, workspace_id=ws.id, ordinal=0, item_type="single_choice", stem="q1", options=[{"option_key":"a","text":"A"},{"option_key":"b","text":"B"}], answer_spec={"correct_option_key":"a"}))
+    i2 = _add(db, PracticeItem(practice_set_id=practice_set.id, workspace_id=ws.id, ordinal=1, item_type="single_choice", stem="q2", options=[{"option_key":"a","text":"A"},{"option_key":"b","text":"B"}], answer_spec={"correct_option_key":"a"}))
+    _add(db, PracticeItemTarget(practice_item_id=i1.id, learning_target_id=target.id, workspace_id=ws.id, criterion_key=None))
+    _add(db, PracticeItemTarget(practice_item_id=i2.id, learning_target_id=target.id, workspace_id=ws.id, criterion_key=None))
+    db.commit()
+    return ws, target, practice_set, i1, i2
+
+
+def _lp_attempt(db, ws, item, option_key):
+    att = _add(db, PracticeAttempt(workspace_id=ws.id, practice_item_id=item.id, ordinal=1, item_type="single_choice", answer_payload={"option_key": option_key}, idempotency_key=f"lp-{uuid4()}", status="succeeded", completed_at=datetime.now(timezone.utc)))
+    is_correct = option_key == "a"
+    fb = _add(db, PracticeFeedback(practice_attempt_id=att.id, workspace_id=ws.id, verdict="correct" if is_correct else "incorrect", score=100 if is_correct else 0, criterion_results=None, feedback_blocks=[], is_ai_graded=0))
+    db.commit()
+    from learn_platform_api.services.learning_projection import project_attempt_feedback
+    project_attempt_feedback(db, ws.id, att, fb)
+    db.commit()
+    return att, fb
+
+
+def probe_lp_one_error_provisional():
+    db = fresh_db()
+    ws, target, ps, i1, i2 = _lp_seed(db)
+    _lp_attempt(db, ws, i1, "b")
+    w = db.scalar(select(Weakness).where(Weakness.learning_target_id == target.id))
+    expect(w is not None and w.status == "provisional", "unexpected_commit", "one error should be provisional")
+    expect(db.scalar(select(func_count(LearningMemory)).where(LearningMemory.workspace_id == ws.id)) == 0, "unexpected_commit", "no memory from provisional")
+    return None
+
+
+def probe_lp_two_errors_confirmed_memory():
+    db = fresh_db()
+    ws, target, ps, i1, i2 = _lp_seed(db)
+    _lp_attempt(db, ws, i1, "b")
+    _lp_attempt(db, ws, i2, "b")
+    w = db.scalar(select(Weakness).where(Weakness.learning_target_id == target.id))
+    expect(w is not None and w.status == "confirmed", "missing_commit", "two errors should confirm")
+    mem_count = db.scalar(select(func_count(LearningMemory)).where(LearningMemory.workspace_id == ws.id))
+    expect(mem_count == 1, "unexpected_commit", f"expected 1 memory, got {mem_count}")
+    return None
+
+
+def probe_lp_idempotent_replay():
+    db = fresh_db()
+    ws, target, ps, i1, _i2 = _lp_seed(db)
+    att, fb = _lp_attempt(db, ws, i1, "b")
+    events_before = db.scalar(select(func_count(LearningEvent)).where(LearningEvent.workspace_id == ws.id))
+    from learn_platform_api.services.learning_projection import project_attempt_feedback
+    project_attempt_feedback(db, ws.id, att, fb)  # replay
+    db.commit()
+    events_after = db.scalar(select(func_count(LearningEvent)).where(LearningEvent.workspace_id == ws.id))
+    expect(events_after == events_before, "unexpected_commit", "replay created duplicate events")
+    return None
+
+
+def probe_lp_memory_suppression():
+    db = fresh_db()
+    ws, target, ps, i1, i2 = _lp_seed(db)
+    _lp_attempt(db, ws, i1, "b")
+    _lp_attempt(db, ws, i2, "b")
+    from learn_platform_api.services.learning import delete_memory
+    mem = db.scalar(select(LearningMemory).where(LearningMemory.workspace_id == ws.id))
+    expect(mem is not None, "missing_commit")
+    delete_memory(db, ws.id, mem.id)
+    # Replay same events via recompute — should not revive memory.
+    from learn_platform_api.services.learning_projection import recompute_workspace
+    recompute_workspace(db, ws.id)
+    db.commit()
+    expect(db.scalar(select(func_count(LearningMemory)).where(LearningMemory.workspace_id == ws.id)) == 0, "unexpected_commit", "memory revived after suppression")
+    return None
+
+
+def probe_lp_ungradable_no_signal():
+    db = fresh_db()
+    ws, target, ps, i1, _i2 = _lp_seed(db)
+    att = _add(db, PracticeAttempt(workspace_id=ws.id, practice_item_id=i1.id, ordinal=1, item_type="short_answer", answer_payload={"text": "dunno"}, idempotency_key="ung", status="succeeded", completed_at=datetime.now(timezone.utc)))
+    fb = _add(db, PracticeFeedback(practice_attempt_id=att.id, workspace_id=ws.id, verdict="ungradable", score=None, criterion_results=None, feedback_blocks=[], is_ai_graded=1))
+    db.commit()
+    from learn_platform_api.services.learning_projection import project_attempt_feedback
+    project_attempt_feedback(db, ws.id, att, fb)
+    db.commit()
+    expect(db.scalar(select(func_count(MasterySignal)).where(MasterySignal.workspace_id == ws.id)) == 0, "unexpected_commit", "ungradable produced signal")
+    return None
+
+
+def probe_lp_review_no_mastery():
+    db = fresh_db()
+    ws, target, ps, i1, i2 = _lp_seed(db)
+    _lp_attempt(db, ws, i1, "b")
+    _lp_attempt(db, ws, i2, "b")
+    from learn_platform_api.services.learning import create_review_action
+    ri = db.scalar(select(ReviewItem).where(ReviewItem.workspace_id == ws.id))
+    expect(ri is not None, "missing_commit")
+    band_before = db.scalar(select(MasteryState).where(MasteryState.learning_target_id == target.id)).band
+    create_review_action(db, ws.id, ri.id, "reviewed")
+    db.commit()
+    band_after = db.scalar(select(MasteryState).where(MasteryState.learning_target_id == target.id)).band
+    expect(band_before == band_after, "unexpected_commit", "review action changed mastery band")
+    return None
+
+
+def probe_lp_api_no_leak():
+    db = fresh_db()
+    ws, target, ps, i1, i2 = _lp_seed(db)
+    _lp_attempt(db, ws, i1, "b")
+    _lp_attempt(db, ws, i2, "b")
+    from learn_platform_api.services.learning import list_learning_state, list_memories
+    state = list_learning_state(db, ws.id)
+    mems = list_memories(db, ws.id)
+    import json
+    blob = json.dumps({"state": state, "memories": mems}, ensure_ascii=False, default=str)
+    for forbidden in ("projection_score", "answer_spec", "rubric", "feedback_blocks", "correct_option_key", "display_text" if False else "prompt", "option_rationales"):
+        expect(forbidden not in blob, "unexpected_commit", f"API leaked '{forbidden}'")
+    return None
+
+
+def probe_lp_policy_default_off():
+    db = fresh_db()
+    ws, *_ = _lp_seed(db)
+    from learn_platform_api.services.learning import get_memory_policy
+    policy = get_memory_policy(db, ws.id)
+    expect(policy["tutor_use_enabled"] is False, "unexpected_commit", "policy should default off")
+    return None
+
+
+def probe_obs_lp_coverage():
+    db = fresh_db()
+    ws, target, ps, i1, i2 = _lp_seed(db)
+    _lp_attempt(db, ws, i1, "b")
+    _lp_attempt(db, ws, i2, "b")
+    state = db.scalar(select(MasteryState).where(MasteryState.learning_target_id == target.id))
+    signals = list(db.scalars(select(MasterySignal).where(MasterySignal.workspace_id == ws.id)))
+    return {"evidence_count": state.evidence_count if state else 0, "signal_count": len(signals), "negative_count": sum(1 for s in signals if s.value < 0.5)}
+
+
 PROBES = {
     "gen_mixed_types": probe_gen_mixed_types, "gen_single": probe_gen_single, "gen_english": probe_gen_english,
     "gen_no_evidence": probe_gen_no_evidence, "gen_unknown_citation": probe_gen_unknown_citation, "gen_invalid_rubric": probe_gen_invalid_rubric,
@@ -592,6 +738,11 @@ PROBES = {
     "scope_source_degraded": probe_scope_source_degraded, "delete_attempt_and_set": probe_delete_attempt_and_set,
     "language_consistency": probe_language_consistency, "privacy_trace_clean": probe_privacy_trace_clean,
     "obs_generation": probe_obs_generation, "obs_grading": probe_obs_grading,
+    "lp_one_error_provisional": probe_lp_one_error_provisional, "lp_two_errors_confirmed_memory": probe_lp_two_errors_confirmed_memory,
+    "lp_idempotent_replay": probe_lp_idempotent_replay, "lp_memory_suppression": probe_lp_memory_suppression,
+    "lp_ungradable_no_signal": probe_lp_ungradable_no_signal, "lp_review_no_mastery": probe_lp_review_no_mastery,
+    "lp_api_no_leak": probe_lp_api_no_leak, "lp_policy_default_off": probe_lp_policy_default_off,
+    "obs_lp_coverage": probe_obs_lp_coverage,
 }
 
 

@@ -297,6 +297,7 @@ def execute_generation(db: Session, settings: Settings, job: PracticeJob, *, wor
     try:
         artifact = PracticeSetArtifact.model_validate(generated)
         validate_practice_citations(artifact, set(chunks))
+        _validate_target_keys(artifact, request)
     except (ValidationError, ValueError) as exc:
         _tool_call(db, run, "SubmitPracticeSet", ordinal, None, None, submit_started, "failed", "invalid_practice_artifact")
         if provider_calls >= settings.practice_generation_max_provider_calls or (provider_calls + searches) >= settings.practice_generation_max_steps:
@@ -305,6 +306,7 @@ def execute_generation(db: Session, settings: Settings, job: PracticeJob, *, wor
         try:
             artifact = PracticeSetArtifact.model_validate(repaired)
             validate_practice_citations(artifact, set(chunks))
+            _validate_target_keys(artifact, request)
         except (ValidationError, ValueError) as repair_exc:
             _tool_call(db, run, "SubmitPracticeSet", ordinal, None, None, repair_started, "failed", "invalid_practice_artifact")
             raise ValueError("invalid_practice_artifact") from repair_exc
@@ -364,17 +366,24 @@ def _commit_set(db: Session, job: PracticeJob, artifact: PracticeSetArtifact, ch
 
 
 def _answer_spec(item) -> dict[str, Any]:
+    target = {"_learning_target_key": item.target_key}
     if item.item_type == "single_choice":
-        return {
+        return target | {
             "correct_option_key": next(option.option_key for option in item.options if option.is_correct),
             "option_rationales": {option.option_key: {"rationale": option.rationale, "citation_ids": option.citation_ids} for option in item.options},
             "citation_ids": list(item.citation_ids),
         }
-    return {
+    return target | {
         "reference_answer": item.reference_answer,
         "rubric": [criterion.model_dump() for criterion in item.rubric],
         "citation_ids": list(item.citation_ids),
     }
+
+
+def _validate_target_keys(artifact: PracticeSetArtifact, request: PracticeAuthorRequest) -> None:
+    allowed = {f"objective_{index}" for index, _ in enumerate(request.learning_objectives, 1)}
+    if not allowed or any(item.target_key not in allowed for item in artifact.items):
+        raise ValueError("invalid_learning_target")
 
 
 def execute_grading(db: Session, settings: Settings, job: PracticeJob, *, worker_id: str, lease_lost=None) -> None:
@@ -457,15 +466,42 @@ def execute_grading(db: Session, settings: Settings, job: PracticeJob, *, worker
 
     # Final authoritative re-check (owner + lease + scope + no prior feedback).
     _assert_grading_authority(db, job, attempt, item, worker_id, lease_lost)
+    reference_answer = str(answer_spec.get("reference_answer", "")).strip()
+    feedback_blocks = [{**block.model_dump(), "option_key": None} for block in feedback.blocks]
+    if reference_answer:
+        reference_label = "示例答案" if job.output_language == "zh-CN" else "Example answer"
+        feedback_blocks.append({
+            "block_key": "approved_example_answer",
+            "type": "reference",
+            "text": f"{reference_label}：{reference_answer}",
+            "citation_ids": [
+                citation_id
+                for citation_id in answer_spec.get("citation_ids", [])
+                if citation_id in allowed_citations
+            ],
+            "option_key": None,
+        })
     record = PracticeFeedback(
         practice_attempt_id=attempt.id, workspace_id=job.workspace_id, verdict=feedback.verdict, score=feedback.score,
         criterion_results=[result.model_dump() for result in feedback.criterion_results] or None,
-        feedback_blocks=[{**block.model_dump(), "option_key": None} for block in feedback.blocks],
+        feedback_blocks=feedback_blocks,
         is_ai_graded=1, created_at=now(),
     )
     db.add(record)
+    db.flush()
+    # §3: Learning projection in the SAME transaction as feedback commit.
+    # Not best-effort — if projection fails, the transaction rolls back.
+    from learn_platform_api.services.learning import ensure_targets_for_lesson_version, ensure_item_target_mapping
+    from learn_platform_api.services.learning_projection import project_attempt_feedback
+    ps = db.get(PracticeSet, item.practice_set_id)
+    if ps is not None:
+        lv = db.get(LessonVersion, ps.lesson_version_id)
+        if lv is not None:
+            ensure_targets_for_lesson_version(db, job.workspace_id, ps.course_id, ps.course_version_id, ps.lesson_id, ps.lesson_version_id, lv.learning_objectives)
+            ensure_item_target_mapping(db, item)
+            project_attempt_feedback(db, job.workspace_id, attempt, record)
     run.status = "succeeded"
-    run.step_count = provider_calls  # = submit attempts (1 first success, 2 repair)
+    run.step_count = provider_calls
     run.input_tokens = None if input_missing else (input_total or None)
     run.output_tokens = None if output_missing else (output_total or None)
     run.completed_at = now()
