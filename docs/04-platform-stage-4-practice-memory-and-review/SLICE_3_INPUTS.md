@@ -1,6 +1,6 @@
 # Stage 4 Slice 3 输入：教学 Skill 与 Tutor 质量
 
-状态：待事实盘点、Spec/ADR 与人工 Gate
+状态：输入已吸收；Spec 003 / ADR 005 已于 2026-07-18 通过人工 Gate并进入 GLM 实现
 
 日期：2026-07-18
 

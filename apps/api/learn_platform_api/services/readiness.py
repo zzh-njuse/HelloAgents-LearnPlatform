@@ -6,6 +6,8 @@ from redis import Redis
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from academic_companion.teaching_skills import SkillUnavailable, current_published, load_skill
+
 
 def check_postgres(engine: Engine) -> dict[str, object]:
     try:
@@ -34,7 +36,8 @@ def check_redis(url: str, timeout: float) -> dict[str, object]:
             socket_timeout=timeout,
             decode_responses=True,
         )
-        return {"ok": bool(client.ping()), "detail": "可用"}
+        ok = bool(client.ping())
+        return {"ok": ok, "detail": "可用" if ok else "不可用"}
     except Exception:
         return {"ok": False, "detail": "不可用"}
     finally:
@@ -50,3 +53,20 @@ def check_storage(path: Path) -> dict[str, object]:
         return {"ok": True, "detail": "可写"}
     except OSError:
         return {"ok": False, "detail": "不可写"}
+
+
+def check_tutor_skill() -> dict[str, object]:
+    """Verify the allow-listed teaching skill resolves and hash-verifies (corr 3.7).
+
+    Mirrors ADR 005 §3.2: the published skill must exist, its metadata must match
+    and its normalized file hash must be computable. The detail is a stable,
+    non-sensitive label only — never the path, prompt body or content hash.
+    """
+    try:
+        skill_id, version = current_published()
+        load_skill(skill_id, version)
+    except SkillUnavailable:
+        return {"ok": False, "detail": "教学 Skill 不可用"}
+    except Exception:
+        return {"ok": False, "detail": "教学 Skill 不可用"}
+    return {"ok": True, "detail": "可用"}

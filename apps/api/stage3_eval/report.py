@@ -60,6 +60,51 @@ class HardCaseResult(_StrictModel):
     error_category: str | None = Field(default=None, pattern=r"^[a-z0-9_]+$", max_length=100)
 
 
+class PairedTutorUsage(_StrictModel):
+    """Provider-call / token usage for the baseline-vs-skill pair (offline).
+
+    Token counts come from the fake provider; offline mode never reads real
+    provider configuration. Field names deliberately avoid the report's
+    forbidden-key set (no ``input_hash``/``query``/``text`` etc.).
+    """
+
+    baseline_provider_calls: int | None = Field(default=None, ge=0)
+    skill_provider_calls: int | None = Field(default=None, ge=0)
+    baseline_input_tokens: int | None = Field(default=None, ge=0)
+    skill_input_tokens: int | None = Field(default=None, ge=0)
+    baseline_output_tokens: int | None = Field(default=None, ge=0)
+    skill_output_tokens: int | None = Field(default=None, ge=0)
+
+
+class PairedTutorRubric(_StrictModel):
+    """Teaching-quality rubric retained for later real-provider pairing.
+
+    All dimensions are ``None`` under the offline fake provider — the offline
+    run only proves the orchestration/contract, never teaching quality.
+    """
+
+    responsiveness: float | None = Field(default=None, ge=0, le=1)
+    evidence_fidelity: float | None = Field(default=None, ge=0, le=1)
+    calibration: float | None = Field(default=None, ge=0, le=1)
+    synthesis: float | None = Field(default=None, ge=0, le=1)
+    priority: float | None = Field(default=None, ge=0, le=1)
+    actionability: float | None = Field(default=None, ge=0, le=1)
+    explanation_depth: float | None = Field(default=None, ge=0, le=1)
+    uncertainty: float | None = Field(default=None, ge=0, le=1)
+
+
+class PairedTutorCase(_StrictModel):
+    """One baseline-vs-skill paired observation on identical fixtures."""
+
+    case_id: str = Field(pattern=r"^[a-z0-9_]+$", max_length=100)
+    intent: str = Field(pattern=r"^[a-z0-9_]+$", max_length=60)
+    baseline_status: Literal["succeeded", "failed"]
+    skill_status: Literal["succeeded", "failed"]
+    gates: dict[str, bool]
+    usage: PairedTutorUsage | None = None
+    human_rubric: PairedTutorRubric
+
+
 class ObservationalResult(_StrictModel):
     case_id: str = Field(pattern=r"^[a-z0-9_]+$", max_length=100)
     role: Literal["course_architect", "lesson_writer", "tutor"]
@@ -87,6 +132,7 @@ class EvalReport(_StrictModel):
     mode: Literal["offline"]
     cases: list[HardCaseResult]
     observational: list[ObservationalResult]
+    paired_tutor: list[PairedTutorCase] = Field(default_factory=list)
     totals: Totals
 
 
@@ -118,6 +164,7 @@ def build_report(
     mode: str,
     case_results: list[dict],
     observational: list[dict],
+    paired_tutor: list[dict] | None = None,
     git_revision: str | None,
     generated_at: str,
 ) -> dict:
@@ -133,6 +180,7 @@ def build_report(
         "mode": mode,
         "cases": case_results,
         "observational": observational,
+        "paired_tutor": paired_tutor or [],
         "totals": {
             "hard_total": len(hard),
             "hard_passed": len(hard_passed),

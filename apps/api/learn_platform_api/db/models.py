@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base
@@ -401,6 +401,14 @@ class TutorTurn(Base):
     __table_args__ = (
         UniqueConstraint("session_id", "ordinal", "attempt_number", name="uq_tutor_turns_session_ordinal_attempt"),
         UniqueConstraint("session_id", "idempotency_key", name="uq_tutor_turns_session_key"),
+        # The teaching-skill snapshot is all-NULL (historical turn) or fully
+        # populated (Slice 3 turn). Declared on the ORM so SQLite test tables
+        # match the Postgres migration 0019 contract (corr 3.8).
+        CheckConstraint(
+            "((teaching_skill_id IS NULL AND teaching_skill_version IS NULL AND teaching_skill_hash IS NULL) "
+            "OR (teaching_skill_id IS NOT NULL AND teaching_skill_version IS NOT NULL AND teaching_skill_hash IS NOT NULL))",
+            name="ck_tutor_turns_teaching_skill_snapshot",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -424,6 +432,12 @@ class TutorTurn(Base):
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Slice 3 immutable teaching-skill snapshot. NULL for historical (pre-Slice-3)
+    # turns; all three populated for new turns. The check constraint lives in
+    # migration 0019 and guarantees "all NULL or all non-NULL".
+    teaching_skill_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    teaching_skill_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    teaching_skill_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

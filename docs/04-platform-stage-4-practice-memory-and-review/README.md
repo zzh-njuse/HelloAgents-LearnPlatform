@@ -1,6 +1,6 @@
 # Platform Stage 4：练习、记忆与复习闭环
 
-状态：Slice 1、Slice 2 已完成并于 2026-07-18 通过人工主路径验收；下一步进入 Slice 3 教学 Skill 的事实盘点与 Spec/ADR 分析
+状态：Slice 1、Slice 2、Slice 3 已完成；当前进入 Slice 4 MCP 外部工具闭环的事实盘点与 Spec/ADR 准备
 
 Stage 4 的目标是让用户在课程学习之后完成练习和作答，获得有引用依据的反馈，并将可解释的薄弱点形成可管理的复习队列。任何 schema、生成 Agent、评分、掌握度或长期 Memory 实现，都必须先经过本阶段 Spec/ADR 和人工 Gate。
 
@@ -28,8 +28,17 @@ Stage 4 的目标是让用户在课程学习之后完成练习和作答，获得
 - [Slice 2 GLM 修正任务包 001](SLICE_2_GLM_CORRECTION_PACKET_001.md)
 - [Slice 2 完成总结](SLICE_2_SUMMARY.md)
 - [Slice 3 输入](SLICE_3_INPUTS.md)
+- [Slice 3 教学 Skill 与 Tutor 事实盘点](SLICE_3_SKILL_FACT_INVENTORY.md)
+- [Slice 3 教学 Skill 运作示例](SLICE_3_SKILL_EXAMPLE.md)
+- [Slice 3 Tutor 教学方式前端概念](SLICE_3_FRONTEND_CONCEPT.md)
+- [Spec 003：证据引导的诊断式支架教学 Skill](specs/003-evidence-guided-diagnostic-scaffold-skill.md)（已接受）
+- [ADR 005：产品拥有的版本化教学 Skill 与 Tutor 执行边界](adr/005-product-owned-versioned-teaching-skill-runtime.md)（已接受）
+- [Slice 3 GLM 实现任务包](SLICE_3_GLM_IMPLEMENTATION_PACKET.md)
+- [Slice 3 完成总结](SLICE_3_SUMMARY.md)
+- [Slice 3 OCR 记录](reviews/2026-07-19-slice-3-ocr.md)
+- [Slice 4 输入](SLICE_4_INPUTS.md)
 - [Slice 1 OCR 记录](reviews/2026-07-16-slice-1-ocr.md)
 - [Slice 2 OCR 记录](reviews/2026-07-17-slice-2-ocr.md)
 - [Stage 3 总结](../03-platform-stage-3-chapter-learning-and-tutor/STAGE_3_SUMMARY.md)
 
-Slice 2 已建立可解释掌握度、复习队列、可管理学习 Memory 与课节完成事实。Slice 3 可以读取这些已授权事实来选择和执行教学方法，但不得把 Skill 变成新的隐藏事实来源，也不得提前引入 Slice 4 MCP。
+Slice 3 已建立版本化、可观测的诊断式教学 Skill，并完成 Tutor 综合、引用、历史隔离、Turn 删除与可靠性闭环。Slice 4 只能在完成单一工具场景选择、Spec/ADR 和人工 Gate 后引入受控 MCP，不得把内部存储包装成 MCP，也不得同时扩展多个工具。

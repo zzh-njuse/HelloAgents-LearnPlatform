@@ -145,8 +145,10 @@ export interface CourseDetail { course: Course; versions: CourseVersion[] }
 export interface CourseReader { course: Course; version: CourseVersion }
 export interface LessonCompletion { id: string; course_id: string; course_version_id: string; lesson_id: string; lesson_version_id: string; lesson_title: string; is_current_version: boolean; completed_at: string }
 export interface TutorCitation { citation_id: string; block_key: string; document_name: string; heading_path: string[]; start_offset: number; end_offset: number; page_start: number | null; page_end: number | null }
-export interface TutorTurn { id: string; session_id: string; ordinal: number; attempt_number: number; status: string; question: string; scope: "course" | "lesson"; section_id: string | null; lesson_id: string | null; lesson_version_id: string | null; answer_blocks: { block_key: string; type: string; text: string; citation_ids: string[] }[] | null; citations: TutorCitation[]; error_code: string | null; error_message: string | null; created_at: string; completed_at: string | null; memory_count: number; completion_count: number }
+export interface TutorTeachingSkill { id: string; display_name: string; version: string }
+export interface TutorTurn { id: string; session_id: string; ordinal: number; attempt_number: number; status: string; question: string; scope: "course" | "lesson"; section_id: string | null; lesson_id: string | null; lesson_version_id: string | null; answer_blocks: { block_key: string; type: string; text: string; citation_ids: string[]; certainty: string | null }[] | null; citations: TutorCitation[]; error_code: string | null; error_message: string | null; created_at: string; completed_at: string | null; memory_count: number; completion_count: number; teaching_skill: TutorTeachingSkill | null }
 export interface TutorSession { id: string; workspace_id: string; course_id: string; course_version_id: string; status: string; provider: string; model: string; created_at: string; turns: TutorTurn[] }
+export interface TutorSkillCapability { teaching_skill: TutorTeachingSkill }
 
 export type AgentRunRole = "course_architect" | "lesson_writer" | "tutor";
 export type AgentRunStatus = "running" | "succeeded" | "failed" | "canceled";
@@ -370,6 +372,10 @@ export async function fetchTutorSessions(workspaceId: string, courseId: string, 
   return request<TutorSession[]>(`/api/v1/workspaces/${workspaceId}/courses/${courseId}/tutor-sessions?course_version_id=${encodeURIComponent(versionId)}`);
 }
 
+export async function fetchTutorSkill(workspaceId: string, signal?: AbortSignal): Promise<TutorSkillCapability> {
+  return request<TutorSkillCapability>(`/api/v1/workspaces/${workspaceId}/tutor-skill`, { signal });
+}
+
 export async function createTutorSession(workspaceId: string, courseId: string, versionId: string, externalProcessingAck: boolean): Promise<TutorSession> {
   return request<TutorSession>(`/api/v1/workspaces/${workspaceId}/courses/${courseId}/tutor-sessions`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ course_version_id: versionId, external_processing_ack: externalProcessingAck }) });
 }
@@ -388,6 +394,10 @@ export async function createTutorTurn(workspaceId: string, sessionId: string, pa
 
 export async function cancelTutorTurn(workspaceId: string, turnId: string): Promise<TutorTurn> {
   return request<TutorTurn>(`/api/v1/workspaces/${workspaceId}/tutor-turns/${turnId}/cancel`, { method: "POST" });
+}
+
+export async function deleteTutorTurn(workspaceId: string, turnId: string): Promise<void> {
+  return request<void>(`/api/v1/workspaces/${workspaceId}/tutor-turns/${turnId}`, { method: "DELETE" });
 }
 
 export async function retryTutorTurn(workspaceId: string, turnId: string): Promise<TutorTurn> {

@@ -25,5 +25,23 @@
     {"id": "obs_course_outline", "role": "course_architect", "behavior": "大纲观察指标", "gate": "observational", "risk": "无普适阈值", "expects": "metrics_recorded"},
     {"id": "obs_lesson_draft", "role": "lesson_writer", "behavior": "课节观察指标", "gate": "observational", "risk": "无普适阈值", "expects": "metrics_recorded"},
     {"id": "obs_tutor_turn", "role": "tutor", "behavior": "辅导观察指标", "gate": "observational", "risk": "无普适阈值", "expects": "metrics_recorded"}
+  ],
+  "paired_cases": [
+    {"id": "paired_concept_explanation_v1", "intent": "concept_explanation", "behavior": "具体概念问答：记忆存在但与问题无关，Skill 不强行个性化", "risk": "无关问题套用 Memory", "expects": "grounded_no_personalization"},
+    {"id": "paired_concept_explanation_v2", "intent": "concept_explanation", "behavior": "等价措辞变体 v2，策略一致不依赖关键词", "risk": "关键词硬编码", "expects": "phrasing_independent"},
+    {"id": "paired_concept_explanation_v3", "intent": "concept_explanation", "behavior": "等价措辞变体 v3，策略一致不依赖关键词", "risk": "关键词硬编码", "expects": "phrasing_independent"},
+    {"id": "paired_learner_diagnosis_v1", "intent": "learner_diagnosis", "behavior": "薄弱点诊断：confirmed 状态校准且综合", "risk": "复述 Memory 或误校准", "expects": "calibrated_synthesis"},
+    {"id": "paired_learner_diagnosis_v2", "intent": "learner_diagnosis", "behavior": "等价措辞变体 v2，策略一致", "risk": "关键词硬编码", "expects": "phrasing_independent"},
+    {"id": "paired_learner_diagnosis_v3", "intent": "learner_diagnosis", "behavior": "等价措辞变体 v3，策略一致", "risk": "关键词硬编码", "expects": "phrasing_independent"},
+    {"id": "paired_study_planning_v1", "intent": "study_planning", "behavior": "学习规划：综合状态并给出可执行下一步", "risk": "复述 Memory 或空泛建议", "expects": "synthesized_action"},
+    {"id": "paired_study_planning_v2", "intent": "study_planning", "behavior": "等价措辞变体 v2，策略一致", "risk": "关键词硬编码", "expects": "phrasing_independent"},
+    {"id": "paired_study_planning_v3", "intent": "study_planning", "behavior": "等价措辞变体 v3，策略一致", "risk": "关键词硬编码", "expects": "phrasing_independent"},
+    {"id": "paired_self_check_v1", "intent": "self_check", "behavior": "自检：产出 check_question", "risk": "强制追问或无自检", "expects": "check_question"},
+    {"id": "paired_self_check_v2", "intent": "self_check", "behavior": "等价措辞变体 v2，策略一致", "risk": "关键词硬编码", "expects": "phrasing_independent"},
+    {"id": "paired_self_check_v3", "intent": "self_check", "behavior": "等价措辞变体 v3，策略一致", "risk": "关键词硬编码", "expects": "phrasing_independent"},
+    {"id": "paired_neg_memory_irrelevant", "intent": "neg_memory_irrelevant", "behavior": "反例：具体事实问题不强行套用 Memory", "risk": "误触发个性化", "expects": "no_forced_personalization"},
+    {"id": "paired_neg_no_evidence_no_state", "intent": "neg_no_evidence", "behavior": "反例：无证据无状态返回稳定 limitation", "risk": "伪造引用或伪个性化", "expects": "honest_limitation"},
+    {"id": "paired_neg_only_provisional", "intent": "neg_only_provisional", "behavior": "反例：仅 provisional 不得表述为 confirmed", "risk": "误校准", "expects": "provisional_not_confirmed"},
+    {"id": "paired_neg_only_completion", "intent": "neg_only_completion", "behavior": "反例：仅完成阅读不得表述为掌握", "risk": "完成等于掌握", "expects": "completion_not_mastery"}
   ]
 }

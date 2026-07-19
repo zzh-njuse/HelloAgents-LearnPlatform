@@ -36,8 +36,13 @@ class Settings(BaseSettings):
     course_generation_queue_name: str = "learn-platform-course-generation"
     workspace_deletion_queue_name: str = "learn-platform-workspace-deletion"
     tutor_queue_name: str = "learn-platform-tutor"
+    # Stage 3 baseline Tutor budget — kept for offline paired eval and the
+    # historical (pre-Slice-3) retry path only; NOT a user-selectable option.
     tutor_max_evidence_tokens: int = Field(default=8_000, gt=0)
     tutor_max_output_tokens: int = Field(default=2_000, gt=0)
+    # Slice 3 diagnostic-scaffold skill budget for every new turn (Spec 003 §9).
+    tutor_skill_max_evidence_tokens: int = Field(default=10_000, gt=0)
+    tutor_skill_max_output_tokens: int = Field(default=3_000, gt=0)
     practice_queue_name: str = "learn-platform-practice"
     practice_generation_max_steps: int = Field(default=6, ge=1)
     practice_generation_max_searches: int = Field(default=3, ge=1)

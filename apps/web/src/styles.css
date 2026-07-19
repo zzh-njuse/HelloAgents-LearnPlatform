@@ -230,6 +230,7 @@ button { cursor: pointer; }
 .tutor-answer.limitation { background: #fff4e7; border-left-color: #c17a30; }
 .tutor-answer p { margin: 0; font-size: 12px; line-height: 1.55; }
 .tutor-answer small, .tutor-citation { color: #55795b; font-size: 10px; }
+.certainty-marker { display: inline-block; margin-bottom: 4px; padding: 1px 7px; border-radius: 9px; background: #e7efe8; color: #315d38; font-size: 10px; font-weight: 700; }
 .tutor-history footer { display: flex; align-items: center; gap: 8px; color: #657068; font-size: 10px; }
 .tutor-history footer button { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; color: #315d38; background: transparent; border: 0; }
 .tutor-panel form { display: grid; gap: 8px; }
@@ -431,6 +432,10 @@ button { cursor: pointer; }
 .reader-learning-summary { display: flex; flex-wrap: wrap; gap: 6px 10px; padding: 9px 10px; border-bottom: 1px solid #d9dfda; color: #526056; font-size: 11px; }
 .reader-learning-summary strong { width: 100%; color: #28322a; font-size: 12px; }
 .tutor-memory-status { padding: 7px 9px; border: 1px solid #d9dfda; background: #f6f8f5; color: #526056; font-size: 11px; }
+.tutor-skill-meta { color: #315d38; font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
+.tutor-skill-badge { font-weight: 700; color: #315d38; overflow-wrap: anywhere; }
+.tutor-history footer { flex-wrap: wrap; }
+.tutor-history footer > span:first-child { margin-right: auto; }
 .learning-job-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 8px 10px; border: 1px solid #d9dfda; background: #f6f8f5; font-size: 12px; }
 .review-card, .memory-card { display: grid; gap: 6px; padding: 12px 14px; border: 1px solid #d9dfda; border-radius: 6px; background: #fff; }
 .review-card-head, .memory-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }

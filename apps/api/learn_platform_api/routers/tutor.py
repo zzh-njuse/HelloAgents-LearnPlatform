@@ -5,18 +5,40 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from learn_platform_api.db.models import Workspace
 from learn_platform_api.db.session import SessionLocal, get_db
-from learn_platform_api.schemas.tutor import TutorSessionCreate, TutorSessionRead, TutorTurnCreate, TutorTurnRead
-from learn_platform_api.services.tutor import cancel_turn, create_session, create_turn, delete_session, get_turn, list_sessions, retry_turn, session_detail, turn_detail, _session
+from learn_platform_api.schemas.tutor import TutorSessionCreate, TutorSessionRead, TutorSkillCapabilityRead, TutorTurnCreate, TutorTurnRead
+from learn_platform_api.services.tutor import cancel_turn, create_session, create_turn, delete_session, delete_turn, get_turn, list_sessions, retry_turn, session_detail, teaching_skill_capability, turn_detail, _session
 from learn_platform_api.settings import get_settings
 
 
 router = APIRouter(prefix="/api/v1/workspaces/{workspace_id}", tags=["tutor"])
 
 
+@router.get("/tutor-skill", response_model=TutorSkillCapabilityRead)
+def tutor_skill_endpoint(workspace_id: str, db: Session = Depends(get_db)):
+    """Minimal read-only capability: the current published teaching skill.
+
+    Lets the Web show ``教学方法：诊断式支架 v1`` before any session exists.
+    A missing or deleting workspace returns a stable 404; a misconfigured skill
+    returns 503 so the failure is visible and never silently downgrades.
+    """
+    workspace = db.get(Workspace, workspace_id)
+    if not workspace or workspace.lifecycle_status != "active":
+        raise HTTPException(404, "Workspace 不存在")
+    try:
+        capability = teaching_skill_capability()
+    except ValueError:
+        raise HTTPException(503, "当前教学 Skill 不可用")
+    return {"teaching_skill": capability}
+
+
 @router.get("/courses/{course_id}/tutor-sessions", response_model=list[TutorSessionRead])
 def list_sessions_endpoint(workspace_id: str, course_id: str, course_version_id: str, db: Session = Depends(get_db)):
-    return [session_detail(db, item) for item in list_sessions(db, workspace_id, course_id, course_version_id)]
+    try:
+        return [session_detail(db, item) for item in list_sessions(db, workspace_id, course_id, course_version_id)]
+    except LookupError:
+        raise HTTPException(404, "Workspace 不存在")
 
 
 @router.post("/courses/{course_id}/tutor-sessions", response_model=TutorSessionRead, status_code=201)
@@ -46,7 +68,9 @@ def create_turn_endpoint(workspace_id: str, session_id: str, payload: TutorTurnC
     try: return turn_detail(db, create_turn(db, get_settings(), workspace_id, session_id, payload, idempotency_key))
     except LookupError: raise HTTPException(404, "Tutor Session 不存在")
     except ValueError as exc:
-        code = str(exc); raise HTTPException(409 if code in {"active_turn_exists", "idempotency_key_conflict", "course_version_inactive"} else 422, code)
+        code = str(exc)
+        if code == "teaching_skill_unavailable": raise HTTPException(503, "当前教学 Skill 不可用")
+        raise HTTPException(409 if code in {"active_turn_exists", "idempotency_key_conflict", "course_version_inactive"} else 422, code)
 
 
 @router.get("/tutor-turns/{turn_id}", response_model=TutorTurnRead)
@@ -54,6 +78,16 @@ def get_turn_endpoint(workspace_id: str, turn_id: str, db: Session = Depends(get
     turn = get_turn(db, workspace_id, turn_id)
     if not turn: raise HTTPException(404, "Tutor Turn 不存在")
     return turn_detail(db, turn)
+
+
+@router.delete("/tutor-turns/{turn_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_turn_endpoint(workspace_id: str, turn_id: str, db: Session = Depends(get_db)):
+    try:
+        deleted = delete_turn(db, workspace_id, turn_id)
+    except ValueError:
+        raise HTTPException(409, "请先等待当前问答完成或取消正在生成的问答")
+    if not deleted:
+        raise HTTPException(404, "Tutor Turn 不存在")
 
 
 @router.post("/tutor-turns/{turn_id}/cancel", response_model=TutorTurnRead)
@@ -84,7 +118,7 @@ def turn_events_endpoint(workspace_id: str, turn_id: str):
                     if turn.status == "succeeded":
                         detail = turn_detail(db, turn)
                         for block in detail["answer_blocks"] or []:
-                            safe_block = {"turn_id": turn.id, "block_key": block["block_key"], "type": block["type"], "text": block["text"], "citation_ids": block["citation_ids"]}
+                            safe_block = {"turn_id": turn.id, "block_key": block["block_key"], "type": block["type"], "text": block["text"], "citation_ids": block["citation_ids"], "certainty": block.get("certainty") if block.get("type") == "learning_diagnosis" else None}
                             yield f"event: answer.delta\ndata: {json.dumps(safe_block, ensure_ascii=False)}\n\n"
                         for citation in detail["citations"]:
                             safe_citation = {key: citation[key] for key in ("citation_id", "block_key", "document_name", "heading_path", "start_offset", "end_offset")}

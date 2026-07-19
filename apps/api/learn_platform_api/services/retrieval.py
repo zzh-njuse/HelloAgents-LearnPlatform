@@ -73,6 +73,7 @@ def retrieve(
     top_k: int,
     candidate_limit: int | None = None,
     document_ids: list[str] | None = None,
+    chunk_ids: list[str] | None = None,
 ) -> tuple[str, list[RetrievalResult]]:
     started = time.perf_counter()
     # The query endpoint also needs enough candidates for lifecycle and
@@ -83,12 +84,17 @@ def retrieve(
             top_k * settings.product_rag_candidate_multiplier,
             settings.product_rag_candidate_cap,
         )
-    vector = embed_texts(settings, [query], "query")[0]
+    vectors = embed_texts(settings, [query], "query")
+    if not vectors or not vectors[0]:
+        raise ValueError("embedding_unavailable")
+    vector = vectors[0]
     client = QdrantClient(url=settings.qdrant_url)
     try:
         filters = [FieldCondition(key="workspace_id", match=MatchValue(value=workspace_id))]
         if document_ids:
             filters.append(FieldCondition(key="document_id", match=MatchAny(any=document_ids)))
+        if chunk_ids:
+            filters.append(FieldCondition(key="chunk_id", match=MatchAny(any=chunk_ids)))
         response = client.query_points(
             collection_name=settings.product_collection_name,
             query=vector,
@@ -118,6 +124,7 @@ def retrieve(
                 or document.current_version_id != version.id
                 or version.processing_status != "ready"
                 or (document_ids is not None and document.id not in document_ids)
+                or (chunk_ids is not None and chunk.id not in chunk_ids)
             ):
                 continue
             score = float(point.score)
@@ -146,6 +153,8 @@ def retrieve(
             filter_summary={
                 "workspace_id": workspace_id,
                 "document_ids": ",".join(document_ids or []),
+                "chunk_scope": "restricted" if chunk_ids is not None else "all",
+                "chunk_count": len(chunk_ids or []),
                 "relevance_policy": "lexical_or_min_score",
                 "minimum_score": settings.product_rag_min_score if settings.product_rag_min_score is not None else 0.50,
             },
@@ -156,7 +165,10 @@ def retrieve(
             latency_ms=round((time.perf_counter() - started) * 1000),
         )
         db.add(trace)
-        db.commit()
+        # Transaction ownership belongs to the caller. Committing here can
+        # accidentally publish a worker's in-flight AgentRun before its final
+        # authority check, defeating cancel/delete/late-result guarantees.
+        db.flush()
         return trace.id, results[:top_k]
     finally:
         _close_client(client)

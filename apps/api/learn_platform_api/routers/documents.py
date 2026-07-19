@@ -158,6 +158,7 @@ def query_documents_endpoint(workspace_id: str, payload: RetrievalQuery, db: Ses
         raise HTTPException(status_code=404, detail="Workspace 不存在")
     try:
         trace_id, results = retrieve(db, get_settings(), workspace_id, payload.query, payload.top_k)
+        db.commit()
     except Exception:
         logger.exception("document_query_failed workspace_id=%s", workspace_id)
         raise HTTPException(status_code=503, detail="检索服务暂不可用")

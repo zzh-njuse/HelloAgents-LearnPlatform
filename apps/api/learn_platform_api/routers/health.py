@@ -6,6 +6,7 @@ from learn_platform_api.services.readiness import (
     check_qdrant,
     check_redis,
     check_storage,
+    check_tutor_skill,
 )
 from learn_platform_api.settings import get_settings
 
@@ -27,6 +28,7 @@ def ready() -> dict[str, object]:
         ),
         "redis": check_redis(settings.redis_url, settings.readiness_timeout_seconds),
         "storage": check_storage(settings.storage_root),
+        "tutor_skill": check_tutor_skill(),
     }
     is_ready = all(bool(check["ok"]) for check in checks.values())
     return {"status": "ready" if is_ready else "degraded", "checks": checks}

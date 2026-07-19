@@ -16,7 +16,7 @@ import json
 import sys
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -235,6 +235,9 @@ def seed_lesson_version(db, workspace, cversion, lesson, chunk):
     return version
 
 
+TUTOR_EVAL_WORKER = "eval-tutor-worker"
+
+
 def seed_tutor_turn(db, workspace, course, cversion, *, scope: str = "lesson", lesson=None, lesson_version=None, status: str = "running", ordinal: int = 1, history_through: int = 0):
     session = _add(db, TutorSession(workspace_id=workspace.id, course_id=course.id, course_version_id=cversion.id, provider="fake", model="fake", external_processing_ack_at=datetime.now(timezone.utc)))
     turn = _add(
@@ -251,6 +254,8 @@ def seed_tutor_turn(db, workspace, course, cversion, *, scope: str = "lesson", l
             lesson_id=lesson.id if lesson else None,
             lesson_version_id=lesson_version.id if lesson_version else None,
             history_through_ordinal=history_through,
+            worker_id=TUTOR_EVAL_WORKER,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=300),
         ),
     )
     db.commit()
@@ -563,7 +568,7 @@ def probe_tutor_lesson_scope():
         (_tutor_answer(["e1"]), {"input_tokens": 12, "output_tokens": 16}),
     ])
     with patched((tutor_generation, "_search", evidence), (tutor_generation, "call_provider", provider)):
-        execute_tutor_turn(db, OFFLINE_SETTINGS, turn)
+        execute_tutor_turn(db, OFFLINE_SETTINGS, turn, worker_id=TUTOR_EVAL_WORKER, lease_lost=None)
         db.commit()
     db.refresh(turn)
     expect(turn.status == "succeeded", "missing_commit", "tutor lesson turn did not succeed")
@@ -586,7 +591,7 @@ def probe_tutor_course_scope():
         (_tutor_answer(["e1"]), {"input_tokens": 12, "output_tokens": 16}),
     ])
     with patched((tutor_generation, "_search", evidence), (tutor_generation, "call_provider", provider)):
-        execute_tutor_turn(db, OFFLINE_SETTINGS, turn)
+        execute_tutor_turn(db, OFFLINE_SETTINGS, turn, worker_id=TUTOR_EVAL_WORKER, lease_lost=None)
         db.commit()
     db.refresh(turn)
     expect(turn.status == "succeeded", "missing_commit", "tutor course turn did not succeed")
@@ -602,7 +607,7 @@ def probe_tutor_no_evidence_refusal():
     session, turn = seed_tutor_turn(db, ws, course, cversion, scope="course")
     provider = _provider_sequence([({"queries": ["core idea"]}, {"input_tokens": 2, "output_tokens": 2})])
     with patched((tutor_generation, "_search", lambda *_a, **_k: ([], {})), (tutor_generation, "call_provider", provider)):
-        execute_tutor_turn(db, OFFLINE_SETTINGS, turn)
+        execute_tutor_turn(db, OFFLINE_SETTINGS, turn, worker_id=TUTOR_EVAL_WORKER, lease_lost=None)
         db.commit()
     db.refresh(turn)
     expect(turn.status == "succeeded", "refusal_violation", "refusal did not complete as succeeded")
@@ -619,9 +624,18 @@ def probe_tutor_cross_source_isolation():
     doc_a, ver_a, _chunk_a = seed_ready_document(db, ws, name="inside", content="In-source evidence.")
     doc_b, ver_b, chunk_b = seed_ready_document(db, ws, name="outside", content="Out-of-source evidence that must be excluded.")
     course, cversion = seed_course_with_version(db, ws, title="TutorIsolation", sources=[(doc_a, ver_a)])
-    session, _turn = seed_tutor_turn(db, ws, course, cversion, scope="course")
+    session, turn = seed_tutor_turn(db, ws, course, cversion, scope="course")
 
-    def fake_retrieve(_db, _settings, _workspace_id, _query, _top_k, candidate_limit=None, document_ids=None):
+    def fake_retrieve(
+        _db,
+        _settings,
+        _workspace_id,
+        _query,
+        _top_k,
+        candidate_limit=None,
+        document_ids=None,
+        chunk_ids=None,
+    ):
         result = RetrievalResult(
             score=0.9,
             text=chunk_b.content,
@@ -630,7 +644,9 @@ def probe_tutor_cross_source_isolation():
         return "eval-trace", [result]
 
     with patched((tutor_generation, "retrieve", fake_retrieve)):
-        evidence, ledger = tutor_generation._search(db, OFFLINE_SETTINGS, session, "core idea", set(), [0])
+        evidence, ledger = tutor_generation._search(
+            db, OFFLINE_SETTINGS, session, turn, "core idea", set(), [0]
+        )
     expect(evidence == [] and ledger == {}, "scope_leak", "out-of-source evidence was not excluded")
     return None
 
@@ -669,7 +685,7 @@ def probe_tutor_unknown_citation_repair():
         (_tutor_answer(["e1"]), {"input_tokens": 10, "output_tokens": 10}),
     ])
     with patched((tutor_generation, "_search", evidence), (tutor_generation, "call_provider", provider)):
-        execute_tutor_turn(db, OFFLINE_SETTINGS, turn)
+        execute_tutor_turn(db, OFFLINE_SETTINGS, turn, worker_id=TUTOR_EVAL_WORKER, lease_lost=None)
         db.commit()
     db.refresh(turn)
     expect(turn.status == "succeeded", "missing_commit", "tutor repair did not complete")
@@ -690,7 +706,7 @@ def probe_tutor_cancel():
     raised = False
     with patched((tutor_generation, "_search", lambda *_a, **_k: ([], {})), (tutor_generation, "call_provider", lambda *_a, **_k: ({"queries": ["core"]}, {"input_tokens": 1, "output_tokens": 1}))):
         try:
-            execute_tutor_turn(db, OFFLINE_SETTINGS, turn)
+            execute_tutor_turn(db, OFFLINE_SETTINGS, turn, worker_id=TUTOR_EVAL_WORKER, lease_lost=None)
             db.commit()
         except ValueError:
             raised = True
@@ -848,12 +864,33 @@ def run_offline(manifest: dict, report_dir: Path) -> int:
         else:
             case_results.append(record)
 
+    # Slice 3 paired baseline-vs-skill Tutor gates (Spec 003 §14.2). Each pair is
+    # also a hard gate so a regression fails the run; the rich baseline/skill
+    # detail + rubric is retained for later real-provider pairing.
+    paired_tutor: list[dict] = []
+    from stage3_eval import paired as paired_eval
+    for spec in paired_eval.PAIRED_CASES:
+        paired_result = paired_eval.run_paired_case(spec)
+        case_results.append({
+            "id": paired_result["case_id"], "role": "tutor", "gate": "hard",
+            "status": "passed" if paired_result["skill_status"] == "succeeded" else "failed",
+            "duration_ms": paired_result["duration_ms"],
+            "error_category": paired_result["error_gate"],
+        })
+        paired_tutor.append({
+            "case_id": paired_result["case_id"], "intent": paired_result["intent"],
+            "baseline_status": paired_result["baseline_status"], "skill_status": paired_result["skill_status"],
+            "gates": paired_result["gates"], "usage": paired_result["usage"],
+            "human_rubric": paired_result["human_rubric"],
+        })
+
     generated = eval_report.build_report(
         manifest_version=manifest["manifest_version"],
         manifest_schema_version=manifest["schema_version"],
         mode="offline",
         case_results=case_results,
         observational=observational,
+        paired_tutor=paired_tutor,
         git_revision=eval_report.read_git_revision(REPO_ROOT),
         generated_at=eval_report.utc_now_iso(),
     )
@@ -861,7 +898,8 @@ def run_offline(manifest: dict, report_dir: Path) -> int:
     eval_report.write_report(generated, report_path)
 
     totals = generated["totals"]
-    print(f"Stage 3 offline eval: {totals['hard_passed']}/{totals['hard_total']} hard gates passed, {totals['observational_total']} observational cases recorded.")
+    paired_passed = sum(1 for entry in paired_tutor if entry["skill_status"] == "succeeded")
+    print(f"Stage 3 offline eval: {totals['hard_passed']}/{totals['hard_total']} hard gates passed, {totals['observational_total']} observational cases recorded, {paired_passed}/{len(paired_tutor)} paired tutor cases passed.")
     print(f"Report written to {report_path}")
     if totals["hard_failed"]:
         failed = [entry["id"] for entry in case_results if entry["status"] != "passed"]

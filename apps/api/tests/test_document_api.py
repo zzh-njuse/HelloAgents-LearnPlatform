@@ -66,6 +66,20 @@ def test_retrieval_reports_unavailable_embedding_provider(client: TestClient, mo
     assert response.json()["detail"] == "检索服务暂不可用"
 
 
+def test_retrieval_reports_empty_embedding_response_as_unavailable(client: TestClient, monkeypatch) -> None:
+    from learn_platform_api.services import retrieval
+
+    monkeypatch.setattr(retrieval, "embed_texts", lambda *_args: [])
+    workspace_id = create_workspace(client)
+    response = client.post(
+        f"/api/v1/workspaces/{workspace_id}/rag/query",
+        json={"query": "测试检索"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "检索服务暂不可用"
+
+
 def test_retrieval_requires_existing_workspace(client: TestClient) -> None:
     response = client.post(
         "/api/v1/workspaces/00000000-0000-0000-0000-000000000000/rag/query",
@@ -665,6 +679,9 @@ def test_retrieval_backreads_postgres_and_filters_stale_candidates(db_session: S
     monkeypatch.setattr(retrieval, "embed_texts", lambda *_args: [[0.1, 0.2, 0.3]])
     monkeypatch.setattr(retrieval, "QdrantClient", FakeQdrant)
 
+    uncommitted = Workspace(name="Must remain uncommitted", slug="retrieve-no-commit")
+    db_session.add(uncommitted)
+    db_session.flush()
     trace_id, results = retrieve(db_session, get_settings(), workspace.id, "question", 5)
 
     assert [result.text for result in results] == ["Body"]
@@ -675,6 +692,13 @@ def test_retrieval_backreads_postgres_and_filters_stale_candidates(db_session: S
     trace = db_session.get(RagQueryTrace, trace_id)
     assert trace.result_count == 1
     assert trace.query_hash != "question"
+    # retrieve owns a trace row, not the caller's transaction. In particular it
+    # must not publish unrelated worker state that happened to be flushed first.
+    other = sessionmaker(bind=db_session.get_bind(), autoflush=False)()
+    try:
+        assert other.get(Workspace, uncommitted.id) is None
+    finally:
+        other.close()
 
 
 def test_retrieval_requires_qualified_evidence_before_returning_or_answering(db_session: Session, monkeypatch) -> None:
