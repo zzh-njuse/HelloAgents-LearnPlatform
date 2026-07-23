@@ -18,7 +18,7 @@ def test_ready_reports_all_checks_without_connection_details(
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "degraded"
-    assert set(payload["checks"]) == {"postgres", "qdrant", "redis", "storage", "tutor_skill"}
+    assert set(payload["checks"]) == {"postgres", "qdrant", "redis", "storage", "tutor_skill", "code_execution", "science_tool"}
     serialized = response.text.lower()
     assert "localhost" not in serialized
     assert "postgresql" not in serialized

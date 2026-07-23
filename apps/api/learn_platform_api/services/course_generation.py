@@ -10,7 +10,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from academic_companion.course_agents import CourseAgentRequest, CourseOutlineArtifact, LessonCoveragePlan, LessonCoverageVerification, LessonDraftArtifact, LessonRepairArtifact, LessonUnitArtifact, build_generation_prompt, build_lesson_coverage_prompt, build_lesson_repair_prompt, build_lesson_unit_prompt, build_lesson_unit_repair_prompt, build_lesson_verification_prompt, build_search_prompt, validate_citations
-from learn_platform_api.db.models import AgentRun, AgentToolCall, Course, CourseGenerationJob, CourseGenerationJobSource, CourseSection, CourseSectionCitation, CourseVersion, CourseVersionSource, Lesson, LessonCitation, LessonVersion, SourceDocument, DocumentChunk, DocumentVersion, Workspace
+from learn_platform_api.db.models import AgentRun, AgentToolCall, Course, CourseGenerationJob, CourseGenerationJobSource, CourseSection, CourseSectionCitation, CourseVersion, CourseVersionSource, JobToolAuthorization, Lesson, LessonCitation, LessonVersion, SourceDocument, DocumentChunk, DocumentVersion, Workspace
 from learn_platform_api.services.retrieval import retrieve
 from learn_platform_api.settings import Settings
 
@@ -43,8 +43,6 @@ def evidence_search(db: Session, settings: Settings, job: CourseGenerationJob, q
         if chunk:
             chunks[citation_id] = chunk
             token_total += estimated
-    if not evidence:
-        raise ValueError("insufficient_evidence")
     return evidence, chunks
 
 
@@ -148,6 +146,29 @@ def _lesson_evidence_search(db: Session, settings: Settings, job: CourseGenerati
 
 
 def _execute_lesson_generation(db: Session, settings: Settings, job: CourseGenerationJob, request: CourseAgentRequest) -> None:
+    # Slice 4 packet 002: Create JobToolAuthorization for science verification
+    # if the CourseGenerationJob has science_tool_authorized=True (Spec 004 §9).
+    # This creates a per-Job authorization with budget tracking.
+    science_auth = None
+    if getattr(job, 'science_tool_authorized', False) and settings.wolfram_mcp_enabled:
+        from learn_platform_api.services.readiness import _read_capability_projection
+        projection = _read_capability_projection(db, "science_computation")
+        if projection is not None and projection.get("ok"):
+            verified_hash = projection.get("verified_schema_hash", "")
+            science_auth = JobToolAuthorization(
+                id=f"jta-{job.id}-science",
+                workspace_id=job.workspace_id,
+                capability_id="science_computation",
+                course_generation_job_id=job.id,
+                max_calls=settings.lesson_generation_max_science_calls,
+                used_calls=0,
+                server_allowlist=json.dumps(["WolframAlpha", "WolframContext"]),
+                schema_hash_snapshot=verified_hash,
+                protocol_version_snapshot="2025-11-25",
+            )
+            db.add(science_auth)
+            db.flush()
+
     run = AgentRun(course_generation_job_id=job.id, workspace_id=job.workspace_id, role="lesson_writer", attempt_number=job.attempt_count, status="running")
     db.add(run)
     db.flush()
@@ -322,12 +343,79 @@ def _execute_lesson_generation(db: Session, settings: Settings, job: CourseGener
             blocks=blocks,
         )
         validate_citations(artifact, set(chunks))
+        from learn_platform_api.services.formula_validator import validate_formula_content
+        for block in artifact.blocks:
+            formula_result = validate_formula_content(block.text)
+            if not formula_result.valid:
+                raise ValueError("invalid_formula_content")
+            if formula_result.repaired_content is not None:
+                block.text = formula_result.repaired_content
     except (ValidationError, ValueError) as exc:
         raise ValueError("invalid_agent_artifact") from exc
 
+    unit_keys = {unit.unit_key for unit in plan.units}
+    block_keys = {block.block_key for block in artifact.blocks}
+    for request_item in verification.science_verification_requests:
+        if request_item.objective_key not in unit_keys or request_item.block_key not in block_keys:
+            raise ValueError("lesson_coverage_invalid")
+
+    # Slice 4 / Correction 012 §2.1: Science verification phase (Spec 004 §5).
+    # If science_tool_authorized and capability ready, execute up to 3
+    # verification calls for derivations that need external confirmation.
+    # Per ADR 006 §2.7: sends only minimal expression, never course text.
+    # Per ADR 006 §2.8: observation is NOT a learning fact.
+    # Per Spec 004 §5.2: each Job max 3 science Tool Calls.
+    # Per Correction 012 §2.1: requests come from the structured
+    # LessonCoverageVerification artifact, not hasattr.
+    science_observations: list[dict[str, Any]] = []
+    if science_auth is not None and verification.science_verification_requests:
+        from learn_platform_api.services.science_tool_service import execute_science_verification
+        for req in verification.science_verification_requests[:3]:
+            _lesson_job_active(db, job, settings, started)
+            db.refresh(science_auth)
+            if science_auth.used_calls >= science_auth.max_calls:
+                break
+            science_auth.used_calls += 1
+            db.flush()
+            science_result = execute_science_verification(
+                tool=req.tool,
+                arguments={"query": req.expression},
+                settings=settings,
+                expected_schema_hash=science_auth.schema_hash_snapshot,
+            )
+            ordinal += 1
+            _tool_call(
+                db, run, f"ScienceVerification:{req.tool}",
+                ordinal, None, 1 if science_result.success else 0,
+                time.perf_counter(),
+                "succeeded" if science_result.success else "failed",
+                science_result.error_code if not science_result.success else None,
+            )
+            if science_result.success:
+                science_observations.append({
+                    "block_key": req.block_key,
+                    "objective_key": req.objective_key,
+                    "provenance": "external_verification",
+                    **science_result.to_safe_dict(),
+                })
+            else:
+                raise ValueError("science_verification_failed")
+
     _lesson_job_active(db, job, settings, started)
     submit_started = time.perf_counter()
-    persist_lesson(db, job, artifact, chunks)
+    version = persist_lesson(db, job, artifact, chunks)
+    # Per Correction 012 §2.1: set practice_type_hints from the
+    # structured plan artifact (not hasattr). The plan's hints are
+    # produced by the Lesson Writer coverage plan phase and bind
+    # objective/evidence keys with executable/computable assertions.
+    if plan.practice_type_hints:
+        version.practice_type_hints = []
+        for hint in plan.practice_type_hints:
+            bound = hint.model_dump()
+            bound["evidence_keys"] = [
+                item["citation_id"] for item in evidence_by_unit[hint.objective_key]
+            ]
+            version.practice_type_hints.append(bound)
     ordinal += 1
     _tool_call(db, run, "SubmitLessonDraft", ordinal, None, 1, submit_started)
     run.status = "succeeded"
@@ -347,7 +435,8 @@ def execute_generation(db: Session, settings: Settings, job: CourseGenerationJob
         raise ValueError("generation_canceled")
     role = "course_architect" if job.job_type == "course_outline" else "lesson_writer"
     lesson = db.get(Lesson, job.lesson_id) if job.lesson_id else None
-    request = CourseAgentRequest(title=course.title, goal=course.goal, audience=course.audience, lesson_title=lesson.title if lesson else None, lesson_objective=lesson.objective if lesson else None, output_language=job.output_language)
+    source_names = tuple(document.display_name for _, document, _ in snapshot_rows(db, job))
+    request = CourseAgentRequest(title=course.title, goal=course.goal, audience=course.audience, lesson_title=lesson.title if lesson else None, lesson_objective=lesson.objective if lesson else None, output_language=job.output_language, source_names=source_names)
     if role == "lesson_writer":
         if lesson is None:
             raise ValueError("lesson_not_found")

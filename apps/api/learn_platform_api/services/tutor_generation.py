@@ -7,18 +7,18 @@ from sqlalchemy.orm import Session
 from pydantic import ValidationError
 
 from academic_companion.teaching_skills import SkillUnavailable, load_skill
-from academic_companion.teaching_skills.contracts import FACTUAL_BLOCK_TYPES, TeachingAnswerArtifact, TeachingPlan
+from academic_companion.teaching_skills.contracts import FACTUAL_BLOCK_TYPES, CodeRequest, ScienceRequest, TeachingAnswerArtifact, TeachingPlan
 from academic_companion.teaching_skills.prompts import answer_prompt as skill_answer_prompt
 from academic_companion.teaching_skills.prompts import plan_prompt as skill_plan_prompt
 from academic_companion.tutor_agents import TutorAnswerArtifact, answer_prompt, search_prompt
-from learn_platform_api.db.models import AgentRun, AgentToolCall, Course, CourseVersionSource, DocumentChunk, DocumentVersion, LearningMemory, LearningMemoryPolicy, LearningTarget, Lesson, LessonCitation, LessonCompletion, LessonVersion, MasteryState, SourceDocument, TutorSession, TutorTurn, TutorTurnCitation, Weakness, Workspace
+from learn_platform_api.db.models import AgentRun, AgentToolCall, CodeLabRun, Course, CourseVersionSource, DocumentChunk, DocumentVersion, LearningMemory, LearningMemoryPolicy, LearningTarget, Lesson, LessonCitation, LessonCompletion, LessonVersion, MasteryState, SourceDocument, TutorSession, TutorTurn, TutorTurnCitation, TutorTurnCodeRun, TutorTurnToolAuthorization, Weakness, Workspace
 from learn_platform_api.services.course_generation import call_provider
 from learn_platform_api.services.retrieval import retrieve
 from learn_platform_api.settings import Settings
 
 #: Maximum Agent decision/tool steps for a skill turn (Spec 003 §9). Skill load
 #: and context selection are deterministic service steps and do NOT consume one.
-SKILL_MAX_STEPS = 5
+SKILL_MAX_STEPS = 8
 #: Conservative learning-state budget. The repo's stable token estimate is
 #: ``len(text) // 2`` (used by tutor history/evidence), so 1600 chars ~ 800
 #: tokens. Counts memory display text, target titles, mastery band, weakness
@@ -54,6 +54,10 @@ def _validate_answer(generated: object, allowed_citations: set[str]) -> TutorAns
         ))
         if block_type in {"explanation", "example"} and not valid_citations:
             continue
+        from learn_platform_api.services.formula_validator import validate_formula_content
+        validation = validate_formula_content(text)
+        if not validation.valid or validation.repaired_content is not None:
+            raise ValueError("invalid_formula_content")
         normalized.append({**raw, "text": text.strip(), "citation_ids": valid_citations})
         seen_keys.add(key)
     if not normalized:
@@ -596,6 +600,10 @@ def _validate_teaching_answer(
         }
         candidate["text"] = text.strip()
         candidate["citation_ids"] = citations
+        from learn_platform_api.services.formula_validator import validate_formula_content
+        validation = validate_formula_content(candidate["text"])
+        if not validation.valid or validation.repaired_content is not None:
+            raise ValueError("invalid_formula_content")
         normalized.append(candidate)
         seen_keys.add(key)
     if not normalized:
@@ -610,7 +618,10 @@ def _validate_teaching_answer(
         response_types = {"learning_diagnosis", "next_action", "limitation"}
     else:
         response_types = {"direct_answer", "limitation"}
-    if not any(block_type in response_types for block_type in types):
+    # science_observation is a valid block type when science tools were used
+    # code_observation is a valid block type when code tools were used
+    response_types_with_science = response_types | {"science_observation", "code_observation"}
+    if not any(block_type in response_types_with_science for block_type in types):
         raise ValueError("invalid_agent_artifact")
 
     for block in artifact.blocks:
@@ -719,6 +730,421 @@ def _record_usage(
     db.flush()
 
 
+# --------------------------------------------------------------------------- #
+# Code Run safe summary for Tutor (Spec 004 §5.1, §9, ADR 006 §2.8).
+# --------------------------------------------------------------------------- #
+
+def _read_code_run_observation(db: Session, turn: TutorTurn) -> dict | None:
+    """Read the bounded safe summary of the Code Run associated with this Turn.
+
+    Per Spec 004 §5.1 and §9: at most one Code Run per Turn. The summary
+    is a bounded, untrusted observation — never course evidence. Only safe
+    metadata is returned; source_code, stdin, stdout, stderr, compile_output
+    are NEVER read or sent.
+
+    Returns None if:
+    - No TutorTurnCodeRun association exists for this Turn
+    - The associated CodeLabRun has been deleted
+    - The associated CodeLabRun is not in a terminal state
+    - The CodeLabRun belongs to a different workspace
+
+    Per correction 003 §3: this is a SEPARATE observation type from
+    science_observations. Code run observations and science observations
+    must be injected independently and remain separated in the answer.
+    """
+    assoc = db.scalar(
+        select(TutorTurnCodeRun).where(
+            TutorTurnCodeRun.turn_id == turn.id,
+        )
+    )
+    if assoc is None:
+        return None
+
+    run = db.scalar(
+        select(CodeLabRun).where(
+            CodeLabRun.id == assoc.code_lab_run_id,
+            CodeLabRun.deleted_at.is_(None),
+        )
+    )
+    if run is None:
+        return None
+
+    # Must be terminal and same workspace
+    _TERMINAL_STATUSES = frozenset({
+        "succeeded", "failed", "completed", "compile_error",
+        "runtime_error", "timed_out", "output_limited", "canceled",
+    })
+    if run.status not in _TERMINAL_STATUSES:
+        return None
+    if run.workspace_id != turn.workspace_id:
+        return None
+
+    # Bounded safe summary per ADR 006 §2.8: only capability, status,
+    # time, size, duration, version — never source_code, stdin, stdout,
+    # stderr, compile_output.
+    return {
+        "type": "code_run_observation",
+        "id": run.id,
+        "language": run.language,
+        "status": run.status,
+        "exit_code": run.exit_code,
+        "duration_ms": run.duration_ms,
+        "runtime": run.runtime,
+        "stdout_truncated": bool(run.stdout_truncated),
+        "stderr_truncated": bool(run.stderr_truncated),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Science tool execution (Spec 004 §6, ADR 006 §2.7).
+# --------------------------------------------------------------------------- #
+
+WOLFRAM_TOOL_WHITELIST = frozenset({"WolframAlpha", "WolframContext"})
+
+
+def _execute_science_tool_call(
+    db: Session,
+    settings: Settings,
+    turn: TutorTurn,
+    auth: TutorTurnToolAuthorization,
+    request: ScienceRequest,
+    run: AgentRun,
+    next_ordinal,
+    started_at: float,
+) -> dict | None:
+    """Execute one science tool call via MCP and return an observation dict.
+
+    Returns None if the call fails (caller should add a limitation block).
+    The observation is a bounded, untrusted JSON dict — never course evidence.
+    Only safe metadata is written to AgentToolCall.
+
+    Per ADR 006 §2.7 and §3: verifies server/protocol/tool allowlist/schema
+    before calling. Remote exception text never enters observation, public
+    answer or logs. WolframLanguageEvaluator is always rejected. Schema
+    drift (inputSchema/outputSchema mismatch against canonical准入 hash)
+    is a hard failure.
+
+    Per correction 005 §4: the Turn snapshot is COMPARED, never overwritten.
+    - create_turn copies the admin-verified hash from the capability projection.
+    - Each call recomputes the full two-Tool hash and compares against the
+      Turn snapshot.
+    - Mismatch → zero call_tool, stable failure trace, limitation block.
+    - retry copies the original snapshot and remaining budget.
+    - A single user call NEVER updates the admin projection or Turn snapshot.
+    """
+    if not settings.wolfram_mcp_enabled:
+        return None
+
+    from learn_platform_api.services.science_tool_service import (
+        normalize_science_arguments,
+        parse_science_text_content,
+    )
+
+    # Increment authorization usage BEFORE the call (send = consume)
+    auth.used_calls += 1
+    db.flush()
+
+    try:
+        from mcp.client.streamable_http import streamable_http_client
+        from mcp.types import CallToolResult, TextContent
+        from shared.mcp_execution_contract import compute_canonical_hash as _compute_schema_hash
+    except ImportError:
+        return None
+
+    url = settings.wolfram_mcp_url.rstrip("/")
+    if not url.endswith("/mcp"):
+        url = url + "/mcp"
+    timeout = settings.wolfram_mcp_call_timeout_seconds
+
+    # Stable error codes — never include raw exception text, remote body,
+    # endpoint URL, or internal IDs (§3.2).
+    _STABLE_ERRORS = frozenset({
+        "protocol_drift", "tool_not_found", "tool_not_allowed",
+        "tool_call_error", "empty_result", "non_json_result",
+        "mcp_connection_failed", "schema_drift", "result_too_large",
+        "capability_unavailable",
+    })
+
+    async def _call():
+        import httpx as _httpx
+        headers = (
+            {"Authorization": f"Bearer {settings.wolfram_mcp_api_key}"}
+            if settings.wolfram_mcp_api_key
+            else None
+        )
+        async with _httpx.AsyncClient(timeout=timeout, headers=headers) as _http_client:
+            async with streamable_http_client(url, http_client=_http_client) as (read, write, _):
+                from mcp.client.session import ClientSession
+                async with ClientSession(read, write) as session:
+                    # Initialize and verify protocol
+                    init_result = await session.initialize()
+                    if init_result.protocolVersion != "2025-03-26":
+                        return {"error": "protocol_drift"}
+
+                    # list_tools and verify full allowlist + schema
+                    tools_result = await session.list_tools()
+                    available_tools = {t.name for t in tools_result.tools}
+
+                    # The remote may advertise extra Tools.  They are not part
+                    # of the product authorization surface and are never called.
+                    expected_allowlist = WOLFRAM_TOOL_WHITELIST
+                    # Check that ALL whitelisted tools are present
+                    missing_tools = expected_allowlist - available_tools
+                    if missing_tools:
+                        return {"error": "tool_not_found"}
+
+                    # Verify the requested tool exists on the server
+                    if request.tool not in available_tools:
+                        return {"error": "tool_not_found"}
+
+                    # Verify only whitelisted tools are used
+                    if request.tool not in WOLFRAM_TOOL_WHITELIST:
+                        return {"error": "tool_not_allowed"}
+
+                    # Per correction 005 §4: verify input/output schema hashes
+                    # match the Turn snapshot (admin-verified准入).
+                    # Compute canonical hashes from the actual MCP list_tools schema
+                    # for ALL whitelisted tools, then compare against auth.mcp_schema_hash.
+                    tool_hashes = {}
+                    for tool_name in expected_allowlist:
+                        target_tool = next(
+                            (t for t in tools_result.tools if t.name == tool_name), None
+                        )
+                        if target_tool is None:
+                            return {"error": "tool_not_found"}
+                        if not target_tool.inputSchema:
+                            return {"error": "schema_drift"}
+                        # Compute canonical schema hash for this tool
+                        # (correction 006 §4: use shared compute_canonical_hash, not _hl)
+                        _t_inp = _compute_schema_hash(target_tool.inputSchema)
+                        _t_out = _compute_schema_hash(target_tool.outputSchema or {})
+                        tool_hashes[tool_name] = f"{_t_inp}:{_t_out}"
+
+                    # Per correction 005 §4: compare the full handshake hash against
+                    # the Turn snapshot (auth.mcp_schema_hash). The snapshot was
+                    # copied from the admin-verified capability projection at
+                    # create_turn time. If it doesn't match, the admin准入 has
+                    # drifted — zero call_tool, stable failure.
+                    # Per correction 006 §4: use shared compute_canonical_hash.
+                    combined = json.dumps({"protocol": init_result.protocolVersion, "tools": tool_hashes}, sort_keys=True)
+                    handshake_hash = hashlib.sha256(combined.encode()).hexdigest()[:16]
+                    if auth.mcp_schema_hash and handshake_hash != auth.mcp_schema_hash:
+                        return {"error": "schema_drift"}
+
+                    # Get the specific tool for the call
+                    target_tool = next(
+                        (t for t in tools_result.tools if t.name == request.tool), None
+                    )
+                    if target_tool is None:
+                        return {"error": "tool_not_found"}
+
+                    # Per correction 005 §4: the snapshot was already compared
+                    # above against auth.mcp_schema_hash. No dynamic overwrite.
+
+                    # Call the tool
+                    result: CallToolResult = await session.call_tool(
+                        request.tool,
+                        arguments=normalize_science_arguments(request.tool, request.arguments),
+                    )
+                    if result.isError:
+                        # Infrastructure error — return stable error, no raw text
+                        return {"error": "tool_call_error"}
+                    raw_json = ""
+                    for content in result.content:
+                        if isinstance(content, TextContent):
+                            raw_json += content.text
+                    return parse_science_text_content(raw_json)
+
+    try:
+        import asyncio
+        # Use the same stable event-loop pattern as code_lab_execution
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, _call())
+                observation = future.result()
+        else:
+            new_loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(new_loop)
+                observation = new_loop.run_until_complete(_call())
+            finally:
+                try:
+                    new_loop.close()
+                finally:
+                    asyncio.set_event_loop(None)
+    except Exception:
+        # Connection errors — stable error code, no raw exception text
+        observation = {"error": "mcp_connection_failed"}
+
+    # Sanitize: only stable error codes, never raw text from remote
+    if isinstance(observation, dict) and "error" in observation:
+        error_code = observation["error"]
+        if error_code not in _STABLE_ERRORS:
+            observation = {"error": "mcp_connection_failed"}
+
+    # Per correction 005 §4: NEVER overwrite auth.mcp_schema_hash.
+    # The Turn snapshot was set at create_turn time from the admin-verified
+    # capability projection. Each call compared the handshake hash against
+    # the snapshot above. If they matched, the call proceeded. If they
+    # didn't match, schema_drift was returned. Either way, the snapshot
+    # is immutable for the lifetime of this Turn.
+
+    latency_ms = round((time.perf_counter() - started_at) * 1000)
+
+    # Write AgentToolCall with safe metadata only
+    db.add(AgentToolCall(
+        agent_run_id=run.id,
+        workspace_id=turn.workspace_id,
+        tool_name=f"McpScienceTool:{request.tool}",
+        ordinal=next_ordinal(),
+        status="succeeded" if "error" not in observation else "failed",
+        input_hash=hashlib.sha256(request.tool.encode()).hexdigest()[:16],
+        result_count=0,
+        latency_ms=latency_ms,
+    ))
+
+    # Bound the observation size
+    observation_json = json.dumps(observation, ensure_ascii=False)
+    if len(observation_json) > 4000:
+        observation = {"error": "result_too_large"}
+        observation_json = json.dumps(observation, ensure_ascii=False)
+
+    return observation
+
+
+def _execute_code_tool_call(
+    db: Session,
+    settings: Settings,
+    turn: TutorTurn,
+    auth: TutorTurnToolAuthorization,
+    request: CodeRequest,
+    run: AgentRun,
+    next_ordinal,
+    started_at: float,
+) -> dict | None:
+    """Execute one code tool call via the canonical MCP client.
+
+    Per Correction 012 §4: reuses the single canonical
+    ``call_run_code_via_mcp()`` from code_lab_execution — no
+    second MCP client implementation. The canonical client handles
+    server identity, protocol, schema hash, and error classification.
+
+    Per Spec 004 §8.1, ADR 006 §2.5: code execution for Tutor's own
+    code_requests (distinct from user's CodeLabRun). Returns None if the
+    call fails (caller should add a limitation block).
+
+    The observation is a bounded, untrusted JSON dict — never course evidence.
+    Only safe metadata is written to AgentToolCall. Full stdout/stderr are
+    NOT included in the observation; only safe summary fields.
+    """
+    if not settings.mcp_execution_adapter_url:
+        return None
+
+    # Increment authorization usage BEFORE the call (send = consume)
+    auth.used_calls += 1
+    db.flush()
+
+    _STABLE_ERRORS = frozenset({
+        "protocol_drift", "tool_not_found", "tool_not_allowed",
+        "tool_call_error", "empty_result", "non_json_result",
+        "mcp_connection_failed", "schema_drift", "result_too_large",
+        "capability_unavailable", "backend_not_configured",
+        "backend_unavailable", "invalid_tool_result",
+        "unrecognized_tool_error",
+    })
+
+    try:
+        from learn_platform_api.services.code_lab_execution import (
+            call_run_code_via_mcp,
+            ExecutionMcpError,
+            BackendUnavailableError,
+            SchemaDriftError,
+            InvalidToolResultError,
+        )
+        import asyncio
+
+        request_id = f"tutor-{turn.id[:12]}-{run.id[:12]}-{next_ordinal()}"
+
+        # Use the canonical sync wrapper
+        from learn_platform_api.services.code_lab_execution import execute_code_run_sync
+        result, handshake = execute_code_run_sync(
+            request_id=request_id,
+            language=request.language,
+            source_code=request.source_code,
+            stdin=request.stdin or "",
+            settings=settings,
+        )
+
+        # Build safe summary observation — no full stdout/stderr
+        safe_observation = {
+            "type": "code_execution_observation",
+            "language": request.language,
+            "status": result.status,
+            "exit_code": result.exit_code,
+            "duration_ms": result.duration_ms,
+        }
+        # Include truncated stdout/stderr summaries (max 500 chars each)
+        if result.stdout:
+            safe_observation["stdout_summary"] = result.stdout[:500] + ("..." if len(result.stdout) > 500 else "")
+        if result.stderr:
+            safe_observation["stderr_summary"] = result.stderr[:500] + ("..." if len(result.stderr) > 500 else "")
+
+        # Bound the observation size
+        observation_json = json.dumps(safe_observation, ensure_ascii=False)
+        if len(observation_json) > 4000:
+            safe_observation = {"error": "result_too_large"}
+
+        latency_ms = round((time.perf_counter() - started_at) * 1000)
+
+        # Write AgentToolCall with safe metadata only
+        db.add(AgentToolCall(
+            agent_run_id=run.id,
+            workspace_id=turn.workspace_id,
+            tool_name=f"McpCodeTool:{request.language}",
+            ordinal=next_ordinal(),
+            status="succeeded",
+            input_hash=hashlib.sha256(request.language.encode()).hexdigest()[:16],
+            result_count=0,
+            latency_ms=latency_ms,
+        ))
+
+        return safe_observation
+
+    except BackendUnavailableError:
+        error_code = "backend_unavailable"
+    except SchemaDriftError:
+        error_code = "schema_drift"
+    except InvalidToolResultError:
+        error_code = "invalid_tool_result"
+    except ExecutionMcpError:
+        error_code = "tool_call_error"
+    except Exception:
+        error_code = "mcp_connection_failed"
+
+    # Infrastructure failure — return error observation
+    latency_ms = round((time.perf_counter() - started_at) * 1000)
+
+    db.add(AgentToolCall(
+        agent_run_id=run.id,
+        workspace_id=turn.workspace_id,
+        tool_name=f"McpCodeTool:{request.language}",
+        ordinal=next_ordinal(),
+        status="failed",
+        input_hash=hashlib.sha256(request.language.encode()).hexdigest()[:16],
+        result_count=0,
+        latency_ms=latency_ms,
+        error_code=error_code,
+    ))
+
+    return {"error": error_code}
+
+
 def _execute_skill_turn(db: Session, settings: Settings, turn: TutorTurn, session: TutorSession, run: AgentRun, worker_id: str | None, lease_lost) -> None:
     context = _lesson_context(db, turn)
     ordinal = 0
@@ -752,11 +1178,12 @@ def _execute_skill_turn(db: Session, settings: Settings, turn: TutorTurn, sessio
     # Provider-call helper: gate, count the step BEFORE the call, track usage.
     usages: list[dict] = []
     step = 0
+    max_decision_steps = getattr(settings, "tutor_max_decision_steps", 8)
 
     def provider_step(messages: list[dict], max_tokens: int) -> tuple[object, dict]:
         nonlocal step
         _check_tutor_active(db, turn, worker_id, lease_lost)
-        if step >= SKILL_MAX_STEPS:
+        if step >= max_decision_steps:
             raise ValueError("agent_step_budget_exceeded")
         step += 1
         run.step_count = step
@@ -767,13 +1194,116 @@ def _execute_skill_turn(db: Session, settings: Settings, turn: TutorTurn, sessio
         return generated, usage
 
     # 3. Plan (first provider call).
-    plan_messages = skill_plan_prompt(turn.question, turn.scope, context, learning_state_available=has_state)
+    # Check science tool authorization BEFORE plan so the model knows
+    # whether science_requests are allowed (Spec 004 §6, ADR 006 §2.7).
+    _science_auth_for_plan = db.scalar(
+        select(TutorTurnToolAuthorization).where(
+            TutorTurnToolAuthorization.turn_id == turn.id,
+            TutorTurnToolAuthorization.capability_id == "science_computation",
+        )
+    )
+    _science_authorized_for_plan = _science_auth_for_plan is not None
+    # Slice 4 packet 002: Check code tool authorization BEFORE plan (Spec 004 §8.1).
+    _code_auth_for_plan = db.scalar(
+        select(TutorTurnToolAuthorization).where(
+            TutorTurnToolAuthorization.turn_id == turn.id,
+            TutorTurnToolAuthorization.capability_id == "code_execution",
+        )
+    )
+    _code_authorized_for_plan = _code_auth_for_plan is not None
+    plan_messages = skill_plan_prompt(turn.question, turn.scope, context, learning_state_available=has_state, science_tool_authorized=_science_authorized_for_plan, code_tool_authorized=_code_authorized_for_plan)
     plan_raw, _plan_usage = provider_step(plan_messages, settings.tutor_skill_max_output_tokens)
     plan = _parse_plan(plan_raw)
     if plan is None:
         query_seed = turn.question[:300].strip() or turn.question[:300]
         plan = TeachingPlan.model_validate({"intent": "other", "queries": [query_seed], "learning_context_use": "unavailable", "teaching_moves": ["explain"]})
         db.add(AgentToolCall(agent_run_id=run.id, workspace_id=turn.workspace_id, tool_name="PlanFallback", ordinal=next_ordinal(), status="succeeded", error_code="plan_degraded", result_count=0, latency_ms=0))
+
+    # 3b. Science tool execution (Spec 004 §6, ADR 006 §2.7).
+    # If no authorization exists, force science_requests to empty BEFORE any
+    # execution — the plan must not have produced any, but we enforce it.
+    # If authorization exists, execute 0..3 MCP calls and collect observations.
+    science_auth = db.scalar(
+        select(TutorTurnToolAuthorization).where(
+            TutorTurnToolAuthorization.turn_id == turn.id,
+            TutorTurnToolAuthorization.capability_id == "science_computation",
+        )
+    )
+    science_observations: list[dict] = []
+    if science_auth is None:
+        # No authorization — force zero requests, zero MCP calls.
+        plan.science_requests = []
+    else:
+        # Authorization exists — execute science_requests from the plan.
+        # Enforce whitelist: only WolframAlpha and WolframContext.
+        # Enforce budget: max 3 calls per Turn.
+        allowed_science_tools = {"WolframAlpha", "WolframContext"}
+        valid_requests = [
+            req for req in plan.science_requests[:3]
+            if req.tool in allowed_science_tools
+        ]
+        for req in valid_requests:
+            _check_tutor_active(db, turn, worker_id, lease_lost)
+            if step >= max_decision_steps:
+                break
+            # Re-check authorization budget
+            db.refresh(science_auth)
+            if science_auth.used_calls >= science_auth.max_calls:
+                break
+            step += 1
+            run.step_count = step
+            db.flush()
+
+            science_started = time.perf_counter()
+            observation = _execute_science_tool_call(
+                db, settings, turn, science_auth, req, run, next_ordinal, science_started,
+            )
+            if observation is not None:
+                science_observations.append(observation)
+
+    # 3d. Code tool execution (Spec 004 §8.1, ADR 006 §2.5).
+    # If no code authorization exists, force code_requests to empty BEFORE any
+    # execution. If authorization exists, execute 0..2 MCP calls.
+    code_auth = db.scalar(
+        select(TutorTurnToolAuthorization).where(
+            TutorTurnToolAuthorization.turn_id == turn.id,
+            TutorTurnToolAuthorization.capability_id == "code_execution",
+        )
+    )
+    code_observations: list[dict] = []
+    if code_auth is None:
+        # No authorization — force zero requests, zero MCP calls.
+        plan.code_requests = []
+    else:
+        # Authorization exists — execute code_requests from the plan.
+        # Enforce budget: max code_calls_per_turn calls per Turn.
+        allowed_languages = {"python", "java", "cpp"}
+        valid_code_requests = [
+            req for req in plan.code_requests[:settings.tutor_max_code_calls_per_turn]
+            if req.language in allowed_languages and len(req.source_code) <= 12000
+        ]
+        for req in valid_code_requests:
+            _check_tutor_active(db, turn, worker_id, lease_lost)
+            # Four-fold budget: total MCP calls
+            total_mcp = len(science_observations) + len(code_observations)
+            if total_mcp >= settings.tutor_max_mcp_calls_per_turn:
+                break
+            if step >= max_decision_steps:
+                break
+            # Re-check authorization budget
+            db.refresh(code_auth)
+            if code_auth.used_calls >= code_auth.max_calls:
+                break
+            step += 1
+            run.step_count = step
+            db.flush()
+
+            code_started = time.perf_counter()
+            code_observation = _execute_code_tool_call(
+                db, settings, turn, code_auth, req, run, next_ordinal, code_started,
+            )
+            if code_observation is not None:
+                code_observations.append(code_observation)
 
     # Build the budgeted injection; the plan decides whether it is actually used.
     # Whether state is "available" for the answer is decided AFTER the budget:
@@ -786,11 +1316,18 @@ def _execute_skill_turn(db: Session, settings: Settings, turn: TutorTurn, sessio
     injected_memory_count = injection["memory_count"] if learning_state_injected else 0
     injected_completion_count = injection["completion_count"] if learning_state_injected else 0
 
+    # 3c. Code Run safe summary injection (Spec 004 §5.1, §9, correction 003 §3).
+    # Read the bounded safe summary from the Turn's associated CodeLabRun.
+    # This is a SEPARATE observation from science_observations — code run
+    # observations are untrusted execution results, not course evidence
+    # and not external computation. They are injected independently.
+    code_run_observation = _read_code_run_observation(db, turn)
+
     # 4. Bounded evidence search using the plan's queries (≤3, ≤5 each, ≤10k tok).
     evidence: list[dict] = []; ledger: dict = {}; seen: set[str] = set(); token_total = [0]
     for query in plan.queries[:3]:
         _check_tutor_active(db, turn, worker_id, lease_lost)
-        if step >= SKILL_MAX_STEPS:
+        if step >= max_decision_steps:
             raise ValueError("agent_step_budget_exceeded")
         # Count the search step BEFORE the retrieve call so a retrieval failure
         # is still reflected in run.step_count (corr 002/3.3).
@@ -808,16 +1345,22 @@ def _execute_skill_turn(db: Session, settings: Settings, turn: TutorTurn, sessio
     if injected_completion_count:
         db.add(AgentToolCall(agent_run_id=run.id, workspace_id=turn.workspace_id, tool_name="LessonCompletionContext", ordinal=next_ordinal(), status="succeeded", result_count=injected_completion_count))
 
-    # 5. No course evidence and no state actually injected/available to the
-    #    answer -> honest limitation. This must be decided by learning_state_injected
-    #    (what the answer can actually use), NOT by injected_state_available: when
-    #    candidates exist but the plan is irrelevant/unavailable (or the budget
-    #    trimmed everything), no projection is sent, so we must NOT call the answer
-    #    provider or claim personalized state (corr 003/3.1).
-    if not evidence and not learning_state_injected:
+    # 5. No course evidence, no state, no code run, and no science/code observations -> honest limitation.
+    #    When science/code observations or code run observations exist (even without course evidence),
+    #    we must still enter the answer phase so the model can synthesize from external computation.
+    #    Per §3.3: if science calls were attempted but all failed (no observations),
+    #    the final artifact MUST contain at least one limitation block.
+    _science_attempted = science_auth is not None and len(plan.science_requests) > 0
+    _science_all_failed = _science_attempted and not science_observations
+    _code_attempted = code_auth is not None and len(plan.code_requests) > 0
+    _code_all_failed = _code_attempted and not code_observations
+    if not evidence and not learning_state_injected and not science_observations and not code_run_observation and not code_observations:
         _assert_final_authority(db, turn, worker_id, lease_lost, ledger)
         completed = datetime.now(timezone.utc)
-        turn.answer_blocks = [{"block_key": "insufficient", "type": "limitation", "text": "当前课程资料不足以可靠回答，且没有可用的个性化学习状态。请缩小问题范围或补充资料。", "citation_ids": []}]
+        if _science_all_failed:
+            turn.answer_blocks = [{"block_key": "insufficient", "type": "limitation", "text": "当前课程资料不足以可靠回答，且科学工具调用未能成功。请缩小问题范围或补充资料。", "citation_ids": []}]
+        else:
+            turn.answer_blocks = [{"block_key": "insufficient", "type": "limitation", "text": "当前课程资料不足以可靠回答，且没有可用的个性化学习状态。请缩小问题范围或补充资料。", "citation_ids": []}]
         turn.status = "succeeded"; turn.completed_at = completed; turn.lease_expires_at = None
         _record_usage(turn, run, usages, db, finalize_turn=True)
         run.status = "succeeded"; run.completed_at = completed
@@ -829,7 +1372,7 @@ def _execute_skill_turn(db: Session, settings: Settings, turn: TutorTurn, sessio
         turn,
         include_answer_text=plan.intent not in {"learner_diagnosis", "study_planning"},
     )
-    answer_messages = skill_answer_prompt(skill.body, turn.question, turn.scope, context, history, evidence, plan, injected_projection)
+    answer_messages = skill_answer_prompt(skill.body, turn.question, turn.scope, context, history, evidence, plan, injected_projection, science_observations=science_observations if science_observations else None, code_run_observation=code_run_observation, code_observations=code_observations if code_observations else None)
     answer_raw, _answer_usage = provider_step(answer_messages, settings.tutor_skill_max_output_tokens)
     target_certainties = injection["target_certainties"] if learning_state_injected else {}
     memory_texts = injection["memory_texts"] if learning_state_injected else []
@@ -852,6 +1395,33 @@ def _execute_skill_turn(db: Session, settings: Settings, turn: TutorTurn, sessio
             raise ValueError("invalid_agent_artifact") from repair_exc
 
     # 7. Unified final authority check before commit (corr 3.1).
+    # Per §3.3: server-validated limitation enforcement. If science calls were
+    # attempted but all failed, the final artifact MUST contain at least one
+    # limitation block. One repair is allowed; if still missing, fail the turn.
+    if _science_all_failed:
+        has_limitation = any(block.type == "limitation" for block in artifact.blocks)
+        if not has_limitation:
+            # Force a limitation block — one repair attempt
+            repair_messages = answer_messages + [
+                {"role": "assistant", "content": json.dumps(answer_raw, ensure_ascii=False)},
+                {
+                    "role": "user",
+                    "content": (
+                        "The science tool calls all failed. You MUST include at least one "
+                        "limitation block (type: limitation) acknowledging this. "
+                        "Return valid JSON matching the original schema."
+                    ),
+                },
+            ]
+            repair_raw, _repair_usage = provider_step(repair_messages, settings.tutor_skill_max_output_tokens)
+            try:
+                artifact = _validate_teaching_answer(repair_raw, set(ledger), learning_state_injected, target_certainties, memory_texts, plan.intent)
+                has_limitation_after_repair = any(block.type == "limitation" for block in artifact.blocks)
+                if not has_limitation_after_repair:
+                    raise ValueError("science_failure_requires_limitation")
+            except (ValidationError, ValueError) as repair_exc:
+                raise ValueError("invalid_agent_artifact") from repair_exc
+
     _assert_final_authority(db, turn, worker_id, lease_lost, ledger)
     _commit_skill_answer(db, turn, artifact, ledger)
     completed = datetime.now(timezone.utc)

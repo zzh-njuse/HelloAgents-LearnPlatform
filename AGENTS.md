@@ -20,7 +20,7 @@
 - 非平凡产品编码默认按 `docs/GLM_IMPLEMENTATION_HANDOFF_WORKFLOW.md` 交给 GLM 实现；Codex 负责需求、Spec/ADR、任务包、独立验收、OCR 和收尾。该文档是 Playbook 的实现交接补充，开始生成任务包或接回 GLM 改动前必须读取。
 - 根 `AGENTS.md` 定义仓库级边界和强制门禁，Playbook 细化具体交互与执行流程。若两者的命令、参数、确认点或流程描述看似不一致，必须在执行前明确指出并请求人工确认，不得自行选择、合并或忽略其中一份。
 - 再读取当前 Stage 的 README、Spec、ADR、review 和阶段总结。
-- Stage 3 与 Stage 4 Slice 1/2/3 已完成；当前进入 Stage 4 Slice 4 受控 MCP 外部工具闭环的事实盘点与 Spec/ADR 准备，入口为 `docs/04-platform-stage-4-practice-memory-and-review/SLICE_4_INPUTS.md`。尚未选择具体工具，禁止提前实现。
+- Stage 3 与 Stage 4 Slice 1/2/3/4 已完成；Stage 4 新增计划外 Slice 5，用于练习生成与评分链路稳定化。当前先按 `SLICE_5_INPUTS.md` 完成事实盘点、Spec/必要 ADR 与人工 Gate，未经确认不得开始主体实现。Slice 4 的实现任务包均已归档，不得继续执行。
 - 先检查 `git status --short --branch`，保留用户和其他 Agent 的未知改动。
 
 ## Stage 与文档门禁
@@ -36,12 +36,13 @@
 
 当前允许：
 
-- 已接受的 Stage 4 Slice 1/2/3 功能维护，以及 Slice 4 单一 MCP 外部工具场景的事实盘点、候选比较、参考资产分析、Spec/ADR 起草与 eval 设计。
-- 人工评审修订、评审归档，以及 Gate 通过后生成对应 Slice 的 GLM 实现任务包。
+- 已完成的 Stage 4 Slice 1/2/3/4 功能维护，以及 Slice 5 的事实盘点、Spec/ADR 分析、人工评审修订与归档。
+- Slice 5 Gate 通过后生成对应 GLM 实现任务包并进入实现。
 
 仍然禁止：
 
-- 在 Slice 4 未选定单一工具场景、Spec/ADR 未经人工接受前实现 MCP server、schema、队列、授权、外发或 Web 产品路径；也不得同时扩展多个工具。
+- 扩展到代码实验室与 Wolfram 科学工具之外的 MCP capability，或绕过执行后端安全停点、远程调用和付费人工 Gate。
+- 在 Slice 5 Spec/ADR 未确认前修改 Practice artifact/schema、评分权威、重试预算或队列状态。
 - 让 GLM、`academic_companion` prototype、fixture 或 framework 示例反向定义产品合同，或借开发协作分工提前引入产品内多 Agent。
 
 ## 工程边界

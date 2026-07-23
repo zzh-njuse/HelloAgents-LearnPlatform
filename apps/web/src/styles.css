@@ -479,6 +479,56 @@ button { cursor: pointer; }
 .completion-memory-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto; gap: 12px; padding: 8px 0; border-top: 1px solid #e2e7e0; }
 .completion-memory-row span, .completion-memory-row small { color: #617064; }
 .focus-completion { margin-top: 28px; padding-bottom: 18px; }
+.code-lab-focused { position: fixed; inset: 0; z-index: 80; overflow-y: auto; padding: 20px max(20px, calc((100vw - 1180px) / 2)); background: #f4f6f3; }
+.code-lab-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.code-lab-heading > div { display: grid; gap: 2px; }
+.code-lab-heading small { color: #657068; }
+.code-lab-focused .code-workbench { max-height: none !important; }
+
+.code-workbench { min-width: 0; overflow: hidden; border: 1px solid #c9d3cb; border-radius: 5px; background: #101713; box-shadow: inset 0 1px 0 rgb(255 255 255 / 4%); }
+.code-workbench .cm-editor { height: 100%; min-width: 0; background: #101713; color: #e5eee7; }
+.code-workbench .cm-scroller { overflow: auto; font-family: "Cascadia Code", Consolas, monospace; }
+.code-workbench .cm-gutters { border-right: 1px solid #2b3930; background: #18211b; color: #829187; }
+.code-workbench .cm-activeLine, .code-workbench .cm-activeLineGutter { background: #233129; }
+.code-workbench .cm-focused { outline: 2px solid #4f805c; outline-offset: -2px; }
+.code-lab-panel, .practice-code-answer { min-width: 0; }
+.code-lab-panel { display: grid; gap: 12px; padding: 14px; border: 1px solid #d4dbd5; border-radius: 6px; background: #fff; }
+.code-lab-language-selector { display: flex; gap: 4px; padding: 3px; width: fit-content; border: 1px solid #d2d9d3; border-radius: 5px; background: #f2f5f2; }
+.lang-btn { min-width: 72px; padding: 7px 10px; border: 0; border-radius: 3px; background: transparent; color: #526058; cursor: pointer; }
+.lang-btn.active { background: #315d38; color: #fff; }
+.code-lab-stdin label, .practice-code-console label { display: grid; gap: 6px; color: #344139; font-size: 12px; font-weight: 700; }
+.stdin-editor { box-sizing: border-box; width: 100%; min-height: 74px; resize: vertical; padding: 9px 10px; border: 1px solid #cbd4cd; border-radius: 4px; background: #f8faf8; font: 13px/1.5 "Cascadia Code", Consolas, monospace; }
+.code-lab-actions, .practice-code-run-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.run-btn { display: inline-flex; align-items: center; min-height: 36px; padding: 0 16px; border: 1px solid #315d38; border-radius: 4px; background: #315d38; color: #fff; font-weight: 700; cursor: pointer; }
+.run-btn:disabled { cursor: not-allowed; opacity: .55; }
+.run-status { color: #536158; font-size: 12px; }
+.run-error { color: #9c3f35; font-size: 12px; }
+.code-lab-output, .practice-code-output { min-width: 0; border: 1px solid #ccd5ce; border-radius: 5px; background: #111814; color: #dce8df; }
+.code-lab-output h4, .practice-code-output header { margin: 0; padding: 8px 10px; border-bottom: 1px solid #2a3830; font-size: 12px; }
+.practice-code-output header { display: flex; justify-content: space-between; gap: 12px; }
+.code-lab-output pre, .practice-code-output pre { max-height: 220px; margin: 0; overflow: auto; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 "Cascadia Code", Consolas, monospace; }
+.error-output { color: #ffb7ad; }
+.practice-code-answer { display: grid; gap: 12px; }
+.practice-code-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border: 1px solid #cad4cc; border-radius: 5px; background: #edf3ee; }
+.practice-code-toolbar > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.practice-code-toolbar span { color: #657169; font-size: 12px; }
+.practice-code-contract { display: grid; gap: 4px; padding: 10px 12px; border-left: 3px solid #4c7756; background: #f4f7f4; }
+.practice-code-contract p { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 8px; margin: 0; color: #465249; font-size: 12px; line-height: 1.55; }
+.practice-code-contract ul { margin: 4px 0 0 74px; padding-left: 16px; font-size: 12px; }
+.practice-code-console { display: grid; gap: 9px; }
+.practice-code-run-row small { color: #69756c; }
+.practice-public-cases { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; }
+.practice-public-cases > strong { grid-column: 1 / -1; }
+.practice-public-cases pre { margin: 0; overflow: auto; padding: 9px 10px; border: 1px solid #d5dcd6; border-radius: 4px; background: #f6f8f6; font: 12px/1.5 "Cascadia Code", Consolas, monospace; }
+.practice-code-focused { position: fixed; inset: 0; z-index: 82; display: block; overflow-y: auto; padding: 20px max(24px, calc((100vw - 1180px) / 2)) 60px; border: 0; border-radius: 0; background: #f1f4f1; }
+.practice-code-focused .practice-code-answer { padding: 16px; border: 1px solid #d4dcd6; background: #fff; }
+.practice-code-focused .practice-actions { position: sticky; bottom: 0; z-index: 2; padding: 10px 0; background: rgb(241 244 241 / 94%); backdrop-filter: blur(8px); }
+.coding-feedback-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 9px 10px; border: 1px solid #ccd8cf; border-radius: 4px; background: #f3f7f4; }
+.coding-feedback-summary span { color: #7c4e1b; font-size: 12px; }
+.coding-public-results { display: flex; gap: 7px; flex-wrap: wrap; }
+.coding-public-results span { padding: 4px 7px; border-radius: 3px; font-size: 12px; }
+.coding-public-results .passed { background: #e8f3e9; color: #2f6840; }
+.coding-public-results .failed { background: #f8e9e7; color: #923a32; }
 
 @media (max-width: 1099px) {
   .review-focus-grid { grid-template-columns: minmax(190px, .7fr) minmax(320px, 1.3fr); }
@@ -491,4 +541,24 @@ button { cursor: pointer; }
   .review-focus-grid { grid-template-columns: 1fr; min-height: 0; }
   .review-evidence { grid-column: auto; }
   .review-queue { max-height: 34vh; }
+}
+.science-verification-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 10px;
+  border-left: 3px solid #6f8f77;
+  background: #eef5ee;
+  font-size: 13px;
+}
+
+.science-verification-status.failed {
+  border-left-color: #b66a3c;
+  background: #fff4e8;
+}
+
+.science-verification-status.not_used {
+  border-left-color: #87908a;
+  background: #f4f6f4;
 }

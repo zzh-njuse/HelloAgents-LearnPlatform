@@ -150,6 +150,8 @@ def test_worker_failure_keeps_real_step_count(db_session: Session, monkeypatch) 
     practice_workers.run_practice_job(job.id); db_session.commit()
     failed_runs = list(db_session.query(AgentRun).filter_by(practice_job_id=job.id, status="failed"))
     assert failed_runs and failed_runs[0].step_count == 4, f"failed AgentRun must keep real step count (plan+search+submit+repair=4), got {failed_runs[0].step_count}"
+    from learn_platform_api.db.models import AgentToolCall
+    assert db_session.query(AgentToolCall).filter_by(agent_run_id=failed_runs[0].id).count() == 3
     assert db_session.query(PracticeSet).filter_by(workspace_id=ws.id).count() == 0
 
 

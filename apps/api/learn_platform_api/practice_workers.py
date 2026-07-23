@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
 
-from learn_platform_api.db.models import AgentRun, PracticeAttempt, PracticeFeedback, PracticeItem, PracticeJob
+from learn_platform_api.db.models import AgentRun, AgentToolCall, PracticeAttempt, PracticeFeedback, PracticeItem, PracticeJob
 from learn_platform_api.db.session import SessionLocal
 from learn_platform_api.services.practice_generation import execute_generation, execute_grading
 from learn_platform_api.services.practice import cleanup_set
@@ -15,14 +15,19 @@ from learn_platform_api.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-RETRYABLE_CODES = {"provider_unavailable", "invalid_practice_artifact"}
+RETRYABLE_CODES = {"provider_unavailable"}
 
 ERROR_MESSAGES = {
+    "coding_item_not_supported_by_lesson": "当前课节缺少可执行学习目标或代码证据，无法生成合适的编程题。请选择自动选择或普通题。",
+    "science_item_not_supported_by_lesson": "当前课节缺少可计算的数学、物理或化学目标与证据，无法生成合适的科学计算题。请选择自动选择或普通题。",
     "source_snapshot_stale": "课程来源已变化，请基于当前资料重新生成",
     "provider_unconfigured": "练习模型尚未配置",
     "provider_unavailable": "练习模型服务暂不可用",
     "insufficient_evidence": "当前资料不足以生成练习",
     "invalid_practice_artifact": "练习结果未通过结构或引用校验",
+    "coding_reference_validation_failed": "模型生成的编程题参考实现未通过后台测试，系统已拒绝发布；请重新生成",
+    "coding_reference_validation_infrastructure_failure": "编程题后台验证服务暂时不可用，请稍后重试",
+    "scientific_answer_verification_failed": "科学题参考答案未通过 Wolfram 验证，系统已拒绝发布；请重新生成",
     "invalid_rubric": "评分标准未通过校验",
     "unknown_citation": "引用校验失败",
     "answer_too_large": "简答答案超出长度限制",
@@ -66,7 +71,7 @@ def maintain_practice_lease(job_id: str, worker_id: str, settings):
         thread.join(timeout=5)
 
 
-def _capture_progress(db, job: PracticeJob) -> int:
+def _capture_progress(db, job: PracticeJob) -> tuple[int, list[dict]]:
     """Read the authoritative step_count from the in-progress AgentRun.
 
     The run's step_count is updated incrementally during execution (before each
@@ -78,16 +83,32 @@ def _capture_progress(db, job: PracticeJob) -> int:
     try:
         db.flush()
     except Exception:
-        return 0
+        return 0, []
     run = db.scalar(select(AgentRun).where(AgentRun.practice_job_id == job.id, AgentRun.workspace_id == job.workspace_id, AgentRun.status == "running"))
     if run is None:
-        return 0
-    return run.step_count or 0
+        return 0, []
+    calls = list(db.scalars(select(AgentToolCall).where(AgentToolCall.agent_run_id == run.id).order_by(AgentToolCall.ordinal)))
+    safe_calls = [{
+        "workspace_id": call.workspace_id,
+        "tool_name": call.tool_name,
+        "ordinal": call.ordinal,
+        "status": call.status,
+        "input_hash": call.input_hash,
+        "result_count": call.result_count,
+        "latency_ms": call.latency_ms,
+        "error_code": call.error_code,
+        "created_at": call.created_at,
+    } for call in calls]
+    return run.step_count or 0, safe_calls
 
 
-def _fail_job(db, job: PracticeJob, code: str, *, retryable: bool, settings, step_count: int = 0) -> None:
+def _fail_job(db, job: PracticeJob, code: str, *, retryable: bool, settings, step_count: int = 0, tool_calls: list[dict] | None = None) -> None:
     role = "exercise_author" if job.job_type == "generate_set" else "answer_grader"
-    db.add(AgentRun(practice_job_id=job.id, workspace_id=job.workspace_id, role=role, attempt_number=job.attempt_count, status="failed", step_count=step_count, error_code=code, completed_at=datetime.now(timezone.utc)))
+    run = AgentRun(practice_job_id=job.id, workspace_id=job.workspace_id, role=role, attempt_number=job.attempt_count, status="failed", step_count=step_count, error_code=code, completed_at=datetime.now(timezone.utc))
+    db.add(run)
+    db.flush()
+    for call in tool_calls or []:
+        db.add(AgentToolCall(agent_run_id=run.id, **call))
     if retryable and job.attempt_count < settings.ingestion_max_attempts:
         job.status = "retry_wait"
         job.next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=5)
@@ -144,7 +165,7 @@ def run_practice_job(job_id: str) -> None:
                     raise ValueError("practice_canceled")
             db.commit()
         except ValueError as exc:
-            progress = _capture_progress(db, job)
+            progress, tool_calls = _capture_progress(db, job)
             db.rollback()
             job = db.get(PracticeJob, job_id)
             if not job or job.worker_id != worker_id:
@@ -168,11 +189,18 @@ def run_practice_job(job_id: str) -> None:
             if job.status != "running":
                 return
             code = str(exc)
-            _fail_job(db, job, code, retryable=code in RETRYABLE_CODES, settings=settings, step_count=progress)
+            _fail_job(db, job, code, retryable=code in RETRYABLE_CODES, settings=settings, step_count=progress, tool_calls=tool_calls)
             db.commit()
         except Exception:
             logger.exception("practice_internal_error job_id=%s", job_id)
-            progress = _capture_progress(db, job)
+            try:
+                progress, tool_calls = _capture_progress(db, job)
+            except Exception:
+                progress, tool_calls = 0, []
+            # SQLAlchemy may already have placed the transaction in a failed
+            # state (for example after a database constraint violation). Roll
+            # back before any ORM read so error handling cannot raise a second
+            # PendingRollbackError and leave the job stuck in ``running``.
             db.rollback()
             job = db.get(PracticeJob, job_id)
             if not job or job.worker_id != worker_id:
@@ -195,7 +223,7 @@ def run_practice_job(job_id: str) -> None:
                 return
             if job.status != "running":
                 return
-            _fail_job(db, job, "practice_internal_error", retryable=False, settings=settings, step_count=progress)
+            _fail_job(db, job, "practice_internal_error", retryable=False, settings=settings, step_count=progress, tool_calls=tool_calls)
             db.commit()
 
 

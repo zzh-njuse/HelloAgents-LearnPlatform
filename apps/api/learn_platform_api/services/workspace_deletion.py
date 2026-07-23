@@ -7,14 +7,15 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from learn_platform_api.db.models import (
-    AgentRun, AgentToolCall, Course, CourseGenerationJob, CourseGenerationJobSource,
+    AgentRun, AgentToolCall, CodeLabJob, CodeLabRun, Course, CourseGenerationJob, CourseGenerationJobSource,
     CourseSection, CourseSectionCitation, CourseVersion, CourseVersionSource,
     DocumentChunk, DocumentParseReport, DocumentVersion, IngestionBatch,
-    IngestionBatchItem, IngestionJob, Lesson, LessonCitation, LessonVersion,
+    IngestionBatchItem, IngestionJob, JobToolAuthorization, Lesson, LessonCitation, LessonVersion,
     PracticeAttempt, PracticeFeedback, PracticeItem, PracticeItemCitation,
     LearningProjectionJob, PracticeJob, PracticeJobSource, PracticeSet,
     RagAnswerTrace, RagQueryTrace, SourceDocument, TutorSession, TutorTurn,
-    TutorTurnCitation, Workspace, WorkspaceDeletionJob,
+    TutorTurnCitation, TutorTurnCodeRun, TutorTurnToolAuthorization,
+    Workspace, WorkspaceDeletionJob, WorkspaceMcpPolicy,
 )
 from learn_platform_api.services.queue import enqueue_workspace_deletion_job
 from learn_platform_api.services.storage import remove_tree
@@ -73,6 +74,7 @@ def create_deletion(
     db.execute(update(TutorTurn).where(TutorTurn.workspace_id == workspace_id, TutorTurn.status.in_(ACTIVE_JOB_STATUSES)).values(status="cancel_requested", lease_expires_at=None, next_attempt_at=None))
     db.execute(update(PracticeJob).where(PracticeJob.workspace_id == workspace_id, PracticeJob.status.in_(ACTIVE_JOB_STATUSES)).values(status="cancel_requested", lease_expires_at=None, next_attempt_at=None))
     db.execute(update(LearningProjectionJob).where(LearningProjectionJob.workspace_id == workspace_id, LearningProjectionJob.status.in_(ACTIVE_JOB_STATUSES)).values(status="cancel_requested", lease_expires_at=None, next_attempt_at=None))
+    db.execute(update(CodeLabJob).where(CodeLabJob.workspace_id == workspace_id, CodeLabJob.status.in_(ACTIVE_JOB_STATUSES)).values(status="cancel_requested", lease_expires_at=None, next_attempt_at=None))
     db.execute(update(IngestionBatchItem).where(IngestionBatchItem.batch_id.in_(select(IngestionBatch.id).where(IngestionBatch.workspace_id == workspace_id)), IngestionBatchItem.status.in_({"pending", "queued", "processing"})).values(status="cancel_requested"))
     job = WorkspaceDeletionJob(workspace_id=workspace_id, status="queued", idempotency_key=idempotency_key)
     db.add(job)
@@ -159,11 +161,16 @@ def _delete_database_rows(db: Session, workspace_id: str) -> None:
     db.execute(delete(PracticeJob).where(PracticeJob.workspace_id == workspace_id))
     db.execute(delete(PracticeSet).where(PracticeSet.workspace_id == workspace_id))
     db.execute(delete(TutorTurnCitation).where(TutorTurnCitation.workspace_id == workspace_id))
+    # Slice 4: MCP records — delete before TutorTurn (FK dependency)
+    db.execute(delete(TutorTurnCodeRun).where(TutorTurnCodeRun.workspace_id == workspace_id))
+    db.execute(delete(TutorTurnToolAuthorization).where(TutorTurnToolAuthorization.workspace_id == workspace_id))
     db.execute(delete(TutorTurn).where(TutorTurn.workspace_id == workspace_id))
     db.execute(delete(TutorSession).where(TutorSession.workspace_id == workspace_id))
     db.execute(delete(LessonCitation).where(LessonCitation.workspace_id == workspace_id))
     db.execute(delete(CourseSectionCitation).where(CourseSectionCitation.workspace_id == workspace_id))
     db.execute(delete(CourseGenerationJobSource).where(CourseGenerationJobSource.workspace_id == workspace_id))
+    # Slice 4 packet 002: Job tool authorizations — delete before owning jobs
+    db.execute(delete(JobToolAuthorization).where(JobToolAuthorization.workspace_id == workspace_id))
     db.execute(delete(CourseGenerationJob).where(CourseGenerationJob.workspace_id == workspace_id))
     db.execute(delete(LessonVersion).where(LessonVersion.workspace_id == workspace_id))
     db.execute(delete(Lesson).where(Lesson.workspace_id == workspace_id))
@@ -181,6 +188,10 @@ def _delete_database_rows(db: Session, workspace_id: str) -> None:
     db.execute(delete(IngestionJob).where(IngestionJob.workspace_id == workspace_id))
     db.execute(delete(DocumentVersion).where(DocumentVersion.document_id.in_(document_ids)))
     db.execute(delete(SourceDocument).where(SourceDocument.workspace_id == workspace_id))
+    # Slice 4: Code lab records — delete after AgentRun (FK dependency)
+    db.execute(delete(CodeLabJob).where(CodeLabJob.workspace_id == workspace_id))
+    db.execute(delete(CodeLabRun).where(CodeLabRun.workspace_id == workspace_id))
+    db.execute(delete(WorkspaceMcpPolicy).where(WorkspaceMcpPolicy.workspace_id == workspace_id))
     db.execute(delete(Workspace).where(Workspace.id == workspace_id, Workspace.lifecycle_status == "deleting"))
 
 

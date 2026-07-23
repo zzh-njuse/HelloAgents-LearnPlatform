@@ -9,6 +9,8 @@ import {
 import { TutorPanel } from "./TutorPanel";
 import { PracticePanel } from "./PracticePanel";
 import { PracticeHistoryPanel } from "./PracticeHistoryPanel";
+import CodeLabPanel from "./CodeLabPanel";
+import RichLearningText from "./RichLearningText";
 import type { ReviewStudyTarget } from "./ReviewMemoryPanel";
 
 const errorMessage = (value: unknown) => value instanceof Error ? value.message : String(value);
@@ -34,12 +36,17 @@ function CitationList({ version }: { version: LessonVersion }) {
 
 function LessonContent({ version, compact = false }: { version: LessonVersion; compact?: boolean }) {
   const numbers = new Map((version.citations ?? []).map((citation, index) => [citation.citation_id, index + 1]));
+  // Build markdown content from blocks for RichLearningText rendering
+  const markdownContent = version.blocks.map((block) => {
+    const citationMarkers = block.citation_ids?.length
+      ? block.citation_ids.map((id) => numbers.has(id) ? `[${numbers.get(id)}]` : "").join("")
+      : "";
+    return block.type === "heading" ? `## ${block.text}` : `${block.text}${citationMarkers}`;
+  }).join("\n\n");
   return <div className={`lesson-draft-content${compact ? " compact" : ""}`}>
     <div className="draft-heading"><strong>{version.title}</strong><small>草稿版本 {version.version_number}</small></div>
     {version.learning_objectives.length ? <ul>{version.learning_objectives.map((objective) => <li key={objective}>{objective}</li>)}</ul> : null}
-    {version.blocks.map((block) => block.type === "heading"
-      ? <h5 key={block.block_key}>{block.text}</h5>
-      : <p key={block.block_key}>{block.text}{block.citation_ids?.length ? <small className="citation-markers">{block.citation_ids.map((id) => numbers.has(id) ? <span key={id}>[{numbers.get(id)}]</span> : null)}</small> : null}</p>)}
+    <RichLearningText content={markdownContent} compact={compact} />
     <CitationList version={version} />
   </div>;
 }
@@ -58,11 +65,13 @@ export function CoursePanel({ workspaceId, documents, reviewTarget, onReviewTarg
   const [error, setError] = useState<string | null>(null);
   const [selectedLessonVersions, setSelectedLessonVersions] = useState<Record<string, string>>({});
   const [focus, setFocus] = useState<FocusState | null>(null);
-  const [middleView, setMiddleView] = useState<"content" | "practice">("content");
+  const [middleView, setMiddleView] = useState<"content" | "practice" | "codelab">("content");
   const [rightView, setRightView] = useState<"tutor" | "history">("tutor");
   const [currentLessonId, setCurrentLessonId] = useState("");
   const [practiceSetId, setPracticeSetId] = useState("");
   const [lessonLearningState, setLessonLearningState] = useState<LearningStateRead | null>(null);
+  // Slice 4 §4.1: at most one completed, non-deleted Code Run selected for next Tutor Turn
+  const [selectedCodeRunForTutor, setSelectedCodeRunForTutor] = useState<{runId: string; language: string} | null>(null);
   const mergeJob = useCallback((next: CourseGenerationJob) => {
     setJobs((current) => [next, ...current.filter((item) => item.id !== next.id)].slice(0, 20));
   }, []);
@@ -205,8 +214,10 @@ export function CoursePanel({ workspaceId, documents, reviewTarget, onReviewTarg
   // Shared practice scope: reset set selection and re-anchor the lesson when the
   // Course/Course Version (or Workspace, which clears the reader) changes, so no
   // stale selector value survives into the new scope.
+  // Per §4.2: also clear the Code Run selection for Tutor on scope change.
   useEffect(() => {
     setPracticeSetId("");
+    setSelectedCodeRunForTutor(null);
     const ids = (reader?.version.sections.flatMap((section) => section.lessons).filter((lesson) => lesson.published_version) ?? []).map((lesson) => lesson.id);
     setCurrentLessonId((current) => (current && ids.includes(current) ? current : ids[0] ?? ""));
     // Intentionally scoped to course/version identity so a scope switch resets
@@ -268,13 +279,14 @@ export function CoursePanel({ workspaceId, documents, reviewTarget, onReviewTarg
           {!reader ? <fieldset className="outline-sources"><legend>新大纲版本所用资料</legend>{documents.filter((item) => item.current_version?.processing_status === "ready").map((document) => <label className="source-choice" key={document.id}><input checked={sources.includes(document.id)} disabled={!sources.includes(document.id) && sources.length >= 20} onChange={(event) => setSources((current) => event.target.checked ? [...current, document.id] : current.filter((id) => id !== document.id))} type="checkbox" />{document.display_name}</label>)}</fieldset> : null}
 
           {reader ? <div className="reader-with-tutor"><div className="reader"><nav className="reader-directory" aria-label="课节目录">{reader.version.sections.map((section) => <div key={section.id}><strong>{section.title}</strong>{section.lessons.map((lesson) => <button className={lesson.id === currentLessonId && lesson.published_version ? "directory-lesson active" : "directory-lesson"} disabled={!lesson.published_version} key={lesson.id} onClick={() => lesson.published_version && setCurrentLessonId(lesson.id)} type="button">{lesson.title}</button>)}</div>)}</nav><main>
-            <div className="reader-view-switch" role="tablist" aria-label="中间视图"><button className={middleView === "content" ? "active" : ""} onClick={() => setMiddleView("content")} role="tab" type="button">正文</button><button className={middleView === "practice" ? "active" : ""} onClick={() => setMiddleView("practice")} role="tab" type="button">练习</button></div>
-            <div className={middleView === "practice" ? "reader-content hidden" : "reader-content"}>{reader.version.sections.flatMap((section) => section.lessons).map((lesson) => <article id={`lesson-article-${lesson.id}`} key={lesson.id}><header className="reader-lesson-heading"><h4>{lesson.title}</h4>{lesson.published_version ? <button className="icon-button" onClick={() => setFocus({ mode: "reader", lessonId: lesson.id })} title="专注阅读" type="button"><Expand size={16} /></button> : null}</header>{lesson.published_version ? <><LessonContent compact version={lesson.published_version} /><div className="lesson-completion"><button className={lessonCompletions[lesson.published_version.id] ? "secondary-button completed" : "primary-button"} disabled={busy} onClick={() => void toggleLessonCompletion(lesson.published_version!)} type="button">{lessonCompletions[lesson.published_version.id] ? <RotateCcw size={15} /> : <CheckCircle2 size={15} />}{lessonCompletions[lesson.published_version.id] ? "撤销学习完毕" : "学习完毕"}</button>{lessonCompletions[lesson.published_version.id] ? <small>完成于 {new Date(lessonCompletions[lesson.published_version.id].completed_at).toLocaleString("zh-CN")}</small> : hasOlderCompletion(lesson.id, lesson.published_version.id) ? <small className="completion-update">内容已更新，请重新确认已完成当前版本。</small> : null}</div></> : <p className="muted">尚未发布</p>}</article>)}</div>
-            <div className={middleView === "content" ? "reader-practice hidden" : "reader-practice"}><PracticePanel reader={reader} workspaceId={workspaceId} lessonId={currentLessonId} onLessonId={setCurrentLessonId} setId={practiceSetId} onSetId={setPracticeSetId} /></div>
+            <div className="reader-view-switch" role="tablist" aria-label="中间视图"><button className={middleView === "content" ? "active" : ""} onClick={() => setMiddleView("content")} role="tab" type="button">正文</button><button className={middleView === "practice" ? "active" : ""} onClick={() => setMiddleView("practice")} role="tab" type="button">练习</button><button className={middleView === "codelab" ? "active" : ""} onClick={() => setMiddleView("codelab")} role="tab" type="button">实验室</button></div>
+            <div className={middleView !== "content" ? "reader-content hidden" : "reader-content"}>{reader.version.sections.flatMap((section) => section.lessons).map((lesson) => <article id={`lesson-article-${lesson.id}`} key={lesson.id}><header className="reader-lesson-heading"><h4>{lesson.title}</h4>{lesson.published_version ? <button className="icon-button" onClick={() => setFocus({ mode: "reader", lessonId: lesson.id })} title="专注阅读" type="button"><Expand size={16} /></button> : null}</header>{lesson.published_version ? <><LessonContent compact version={lesson.published_version} /><div className="lesson-completion"><button className={lessonCompletions[lesson.published_version.id] ? "secondary-button completed" : "primary-button"} disabled={busy} onClick={() => void toggleLessonCompletion(lesson.published_version!)} type="button">{lessonCompletions[lesson.published_version.id] ? <RotateCcw size={15} /> : <CheckCircle2 size={15} />}{lessonCompletions[lesson.published_version.id] ? "撤销学习完毕" : "学习完毕"}</button>{lessonCompletions[lesson.published_version.id] ? <small>完成于 {new Date(lessonCompletions[lesson.published_version.id].completed_at).toLocaleString("zh-CN")}</small> : hasOlderCompletion(lesson.id, lesson.published_version.id) ? <small className="completion-update">内容已更新，请重新确认已完成当前版本。</small> : null}</div></> : <p className="muted">尚未发布</p>}</article>)}</div>
+            <div className={middleView !== "practice" ? "reader-practice hidden" : "reader-practice"}><PracticePanel reader={reader} workspaceId={workspaceId} lessonId={currentLessonId} onLessonId={setCurrentLessonId} setId={practiceSetId} onSetId={setPracticeSetId} /></div>
+            <div className={middleView !== "codelab" ? "reader-codelab hidden" : "reader-codelab"}><CodeLabPanel workspaceId={workspaceId} onCodeRunForTutor={setSelectedCodeRunForTutor} /></div>
           </main></div><div className="reader-right">
             {lessonLearningState ? <div className="reader-learning-summary"><strong>当前课节</strong><span>需要复习 {lessonLearningState.summary.needs_review ?? 0}</span><span>学习中 {lessonLearningState.summary.developing ?? 0}</span><span>较稳固 {lessonLearningState.summary.secure ?? 0}</span></div> : null}
             <div className="reader-view-switch" role="tablist" aria-label="右侧视图"><button className={rightView === "tutor" ? "active" : ""} onClick={() => setRightView("tutor")} role="tab" type="button">Tutor</button><button className={rightView === "history" ? "active" : ""} onClick={() => setRightView("history")} role="tab" type="button">练习记录</button></div>
-            <div className={rightView === "history" ? "hidden" : ""}><TutorPanel reader={reader} workspaceId={workspaceId} lessonId={currentLessonId} onLessonId={setCurrentLessonId} onManageMemory={onManageMemory} /></div>
+            <div className={rightView === "history" ? "hidden" : ""}><TutorPanel reader={reader} workspaceId={workspaceId} lessonId={currentLessonId} onLessonId={setCurrentLessonId} onManageMemory={onManageMemory} codeRunId={selectedCodeRunForTutor?.runId ?? null} onCodeRunConsumed={() => setSelectedCodeRunForTutor(null)} /></div>
             <div className={rightView === "tutor" ? "hidden" : ""}><PracticeHistoryPanel reader={reader} workspaceId={workspaceId} lessonId={currentLessonId} setId={practiceSetId} onSetId={setPracticeSetId} /></div>
           </div></div>
             : detail.versions.map((version, versionIndex) => <details className="outline" key={version.id} open={versionIndex === 0}>

@@ -90,3 +90,16 @@ def enqueue_learning_recompute(settings: Settings, job_id: str) -> None:
         )
     finally:
         connection.close()
+
+
+# Slice 4: Code lab queue
+
+
+def enqueue_code_lab_job(settings: Settings, job_id: str) -> None:
+    connection = Redis.from_url(settings.redis_url)
+    try:
+        Queue(settings.code_lab_queue_name, connection=connection).enqueue(
+            "learn_platform_api.code_lab_workers.run_code_lab_job", job_id
+        )
+    finally:
+        connection.close()

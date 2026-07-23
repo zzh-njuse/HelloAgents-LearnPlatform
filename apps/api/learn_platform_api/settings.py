@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     practice_generation_max_steps: int = Field(default=6, ge=1)
     practice_generation_max_searches: int = Field(default=3, ge=1)
     practice_generation_max_provider_calls: int = Field(default=6, ge=1)
+    practice_generation_max_attempt_steps: int = Field(default=20, ge=1)
     practice_generation_max_evidence_tokens: int = Field(default=24_000, gt=0)
     practice_generation_max_output_tokens: int = Field(default=12_000, gt=0)
     practice_generation_search_top_k: int = Field(default=5, gt=0, le=5)
@@ -93,6 +94,34 @@ class Settings(BaseSettings):
 
     request_id_header: str = "X-Request-ID"
     readiness_timeout_seconds: float = 2.0
+
+    # Slice 4: MCP execution adapter (Spec 004 §5, ADR 006 §2.2)
+    mcp_execution_adapter_url: str | None = None  # internal adapter service URL
+    code_lab_queue_name: str = "learn-platform-code-lab"
+    code_lab_lease_seconds: int = Field(default=120, gt=1)
+    code_lab_heartbeat_seconds: int = Field(default=30, gt=0)
+    code_lab_max_attempts: int = Field(default=3, ge=1)
+    code_lab_execution_timeout_seconds: float = Field(default=15.0, gt=0)
+
+    # Slice 4: Wolfram science tool (Spec 004 §6, ADR 006 §2.2)
+    wolfram_mcp_enabled: bool = False
+    wolfram_mcp_url: str = "https://agenttools.wolfram.com/mcp"
+    wolfram_mcp_api_key: str | None = None
+    wolfram_mcp_connect_timeout_seconds: float = Field(default=10.0, gt=0)
+    wolfram_mcp_call_timeout_seconds: float = Field(default=30.0, gt=0)
+    wolfram_max_calls_per_turn: int = Field(default=3, ge=1)
+
+    # Slice 4 packet 002: dual Tool budgets (Spec 004 §12, ADR 006 §3)
+    tutor_max_mcp_calls_per_turn: int = Field(default=3, ge=1)  # total MCP (code + science)
+    tutor_max_code_calls_per_turn: int = Field(default=2, ge=0)  # code subset
+    tutor_max_science_calls_per_turn: int = Field(default=3, ge=0)  # science subset
+    tutor_max_decision_steps: int = Field(default=8, ge=5)  # raised from 5 to 8
+    # Practice coding/science budgets
+    practice_generation_max_tool_calls: int = Field(default=10, ge=0)  # reference + starter validation / science per Set
+    practice_coding_max_ref_calls: int = Field(default=1, ge=0)  # per coding item
+    practice_grading_max_science_calls: int = Field(default=2, ge=0)  # per scientific item
+    # Lesson Writer science budget
+    lesson_generation_max_science_calls: int = Field(default=3, ge=0)  # per Lesson Job
 
     @property
     def cors_origin_list(self) -> list[str]:

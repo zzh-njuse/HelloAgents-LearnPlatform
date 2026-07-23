@@ -31,9 +31,12 @@ import yaml
 SKILLS_ROOT = Path(__file__).resolve().parent
 
 #: The product allowlist. Each entry pins one published (id, version) and its
-#: stable UI display name. Adding v2 means a new directory AND a new entry here;
-#: v1 is retained so historical turns can still show and retry their version.
+#: stable UI display name. v4 is the current published skill (Slice 4 packet 002
+#: adds dual Tool capability: code execution + science computation). v3, v2 and
+#: v1 are retained so historical turns can still show and retry their version.
 ALLOWLIST: tuple[dict[str, str], ...] = (
+    {"id": "evidence-guided-diagnostic-scaffold", "version": "4", "display_name": "诊断式支架"},
+    {"id": "evidence-guided-diagnostic-scaffold", "version": "3", "display_name": "诊断式支架"},
     {"id": "evidence-guided-diagnostic-scaffold", "version": "2", "display_name": "诊断式支架"},
     {"id": "evidence-guided-diagnostic-scaffold", "version": "1", "display_name": "诊断式支架"},
 )

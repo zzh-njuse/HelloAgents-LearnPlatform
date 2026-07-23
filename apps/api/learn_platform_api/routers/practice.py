@@ -9,6 +9,8 @@ from learn_platform_api.schemas.practice import (
     PracticeSetCreate,
     PracticeSetListItem,
     PracticeSetRead,
+    ItemTypeMode,
+    CodeLanguage,
 )
 from learn_platform_api.services.practice import (
     cancel_job,
@@ -22,6 +24,7 @@ from learn_platform_api.services.practice import (
     list_sets,
     retry_job,
     submit_attempt,
+    _science_verification_read,
 )
 from learn_platform_api.settings import get_settings
 
@@ -150,4 +153,5 @@ def get_job_read(db: Session, job) -> PracticeJobRead:
         id=job.id, job_type=job.job_type, practice_set_id=job.practice_set_id, practice_attempt_id=job.practice_attempt_id,
         status=job.status, attempt_count=job.attempt_count, error_code=job.error_code, error_message=job.error_message,
         created_at=job.created_at, updated_at=job.updated_at,
+        science_verification=_science_verification_read(db, job.id, "VerifyScientificAnswer", "reference_answer") if job.job_type == "generate_set" else None,
     )

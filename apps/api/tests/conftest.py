@@ -8,7 +8,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 API_ROOT = Path(__file__).resolve().parents[1]
+APPS_DIR = API_ROOT.parent  # apps/ directory — enables "from shared..."
 REPOSITORY_ROOT = API_ROOT.parents[1]
+if str(APPS_DIR) not in sys.path:
+    sys.path.insert(0, str(APPS_DIR))
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 if str(API_ROOT) not in sys.path:

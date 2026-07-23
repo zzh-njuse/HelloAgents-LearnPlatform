@@ -327,6 +327,10 @@ class LessonVersion(Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     learning_objectives: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     blocks: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
+    # Per Correction 011 §1.2: structured practice type hints set by the
+    # Lesson Writer during generation. Used by Practice type adaptation
+    # as a structural, content-agnostic contract — NOT keyword scanning.
+    practice_type_hints: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -364,6 +368,8 @@ class CourseGenerationJob(Base):
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Slice 4 packet 002: Lesson Writer science verification authorization
+    science_tool_authorized: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
@@ -438,6 +444,12 @@ class TutorTurn(Base):
     teaching_skill_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     teaching_skill_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
     teaching_skill_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Slice 4 packet 002: code tool authorization and usage projection
+    code_tool_authorized: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    code_tool_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    code_tool_call_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    science_tool_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    science_tool_call_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -459,11 +471,21 @@ class TutorTurnCitation(Base):
 
 class AgentRun(Base):
     __tablename__ = "agent_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "((CASE WHEN course_generation_job_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN tutor_turn_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN practice_job_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN code_lab_job_id IS NOT NULL THEN 1 ELSE 0 END)) = 1",
+            name="ck_agent_runs_one_owner",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     course_generation_job_id: Mapped[str | None] = mapped_column(ForeignKey("course_generation_jobs.id"), index=True, nullable=True)
     tutor_turn_id: Mapped[str | None] = mapped_column(ForeignKey("tutor_turns.id", ondelete="CASCADE"), index=True, nullable=True)
     practice_job_id: Mapped[str | None] = mapped_column(ForeignKey("practice_jobs.id"), index=True, nullable=True)
+    code_lab_job_id: Mapped[str | None] = mapped_column(ForeignKey("code_lab_jobs.id", ondelete="CASCADE"), index=True, nullable=True)
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True, nullable=False)
     role: Mapped[str] = mapped_column(String(40), nullable=False)
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -521,6 +543,9 @@ class PracticeJob(Base):
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Slice 4 packet 002: item type mode and code language request
+    item_type_mode: Mapped[str] = mapped_column(String(20), default="auto", nullable=False)
+    code_languages: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -570,6 +595,10 @@ class PracticeItem(Base):
     # Hidden grading material: correct option, option rationales, rubric and
     # reference answer. Never projected into a pre-submission read schema.
     answer_spec: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    # Slice 4 packet 002: public interaction spec for coding items
+    # (language, starter_code, io description, constraints, public examples, limits)
+    # Null for non-coding items.
+    interaction_spec: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
@@ -599,6 +628,8 @@ class PracticeAttempt(Base):
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     item_type: Mapped[str] = mapped_column(String(20), nullable=False)
     answer_payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    # Slice 4 packet 002: source code for coding attempts (1..20000 chars)
+    source_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="succeeded", nullable=False, index=True)
     practice_job_id: Mapped[str | None] = mapped_column(ForeignKey("practice_jobs.id"), index=True, nullable=True)
@@ -625,6 +656,11 @@ class PracticeFeedback(Base):
     criterion_results: Mapped[list[dict[str, object]] | None] = mapped_column(JSON, nullable=True)
     feedback_blocks: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
     is_ai_graded: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Slice 4 packet 002: coding execution summary (safe projection)
+    coding_tests_passed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    coding_tests_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    coding_error_categories: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    coding_public_cases: Mapped[list[dict[str, object]] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
@@ -847,3 +883,208 @@ class LessonCompletion(Base):
     lesson_id: Mapped[str] = mapped_column(ForeignKey("lessons.id", ondelete="CASCADE"), index=True, nullable=False)
     lesson_version_id: Mapped[str] = mapped_column(ForeignKey("lesson_versions.id", ondelete="CASCADE"), index=True, nullable=False)
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+# --------------------------------------------------------------------------- #
+# Stage 4 Slice 4: Controlled MCP Capabilities
+# --------------------------------------------------------------------------- #
+
+
+class WorkspaceMcpPolicy(Base):
+    __tablename__ = "workspace_mcp_policies"
+
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    code_execution_enabled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class CodeLabRun(Base):
+    __tablename__ = "code_lab_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True, nullable=False)
+    # Optional navigation grouping
+    course_id: Mapped[str | None] = mapped_column(ForeignKey("courses.id", ondelete="SET NULL"), nullable=True)
+    course_version_id: Mapped[str | None] = mapped_column(ForeignKey("course_versions.id", ondelete="SET NULL"), nullable=True)
+    lesson_id: Mapped[str | None] = mapped_column(ForeignKey("lessons.id", ondelete="SET NULL"), nullable=True)
+    lesson_version_id: Mapped[str | None] = mapped_column(ForeignKey("lesson_versions.id", ondelete="SET NULL"), nullable=True)
+    # Fixed language
+    language: Mapped[str] = mapped_column(String(10), nullable=False)
+    # Private I/O
+    source_code: Mapped[str] = mapped_column(Text, nullable=False)
+    stdin: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Execution result
+    status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False, index=True)
+    compile_output: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    stdout: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    stderr: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    runtime: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    stdout_truncated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    stderr_truncated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # MCP snapshot
+    mcp_server_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    mcp_server_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    mcp_protocol_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    mcp_tool_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    mcp_input_schema_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    mcp_output_schema_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CodeLabJob(Base):
+    __tablename__ = "code_lab_jobs"
+    __table_args__ = (UniqueConstraint("workspace_id", "idempotency_key", name="uq_code_lab_jobs_workspace_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True, nullable=False)
+    run_id: Mapped[str] = mapped_column(ForeignKey("code_lab_runs.id", ondelete="CASCADE"), nullable=False, unique=True)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False, index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    worker_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TutorTurnToolAuthorization(Base):
+    __tablename__ = "tutor_turn_tool_authorizations"
+    __table_args__ = (UniqueConstraint("turn_id", "capability_id", name="uq_tutor_turn_tool_auth_turn_capability"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    turn_id: Mapped[str] = mapped_column(ForeignKey("tutor_turns.id", ondelete="CASCADE"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True, nullable=False)
+    capability_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    # Budget
+    max_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    used_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # MCP snapshot
+    mcp_server_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    mcp_protocol_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    mcp_tool_allowlist: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
+    mcp_schema_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Timestamps
+    authorized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class TutorTurnCodeRun(Base):
+    __tablename__ = "tutor_turn_code_runs"
+    __table_args__ = (UniqueConstraint("turn_id", name="uq_tutor_turn_code_runs_turn"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    turn_id: Mapped[str] = mapped_column(ForeignKey("tutor_turns.id", ondelete="CASCADE"), index=True, nullable=False)
+    code_lab_run_id: Mapped[str] = mapped_column(ForeignKey("code_lab_runs.id", ondelete="CASCADE"), index=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+
+
+# --------------------------------------------------------------------------- #
+# Stage 4 Slice 4: MCP Capability Status Projection (correction 004 §3/§4)
+# --------------------------------------------------------------------------- #
+
+
+class McpCapabilityStatus(Base):
+    """Desensitized capability readiness projection written by probe/worker.
+
+    Per correction 004 §3/§4: readiness must come from an actual, TTL-bearing
+    capability status projection — not from enabled=True or URL non-empty.
+    The probe/worker that holds the remote config writes this row; the API
+    only reads it. enabled ≠ ready.
+
+    The projection contains only desensitized status information — never
+    URLs, credentials, remote body text, or internal IDs.
+    """
+
+    __tablename__ = "mcp_capability_statuses"
+    __table_args__ = (UniqueConstraint("capability_id", name="uq_mcp_capability_statuses_capability"),)
+
+    capability_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    # Projection status: "ready" | "unavailable" | "verification_pending" | "disabled"
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="unavailable")
+    # Desensitized detail — stable, human-readable reason only
+    detail: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Verified schema hash from the last successful probe (empty = never verified)
+    verified_schema_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    # TTL: when this projection was last checked
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    # TTL: how many seconds this projection remains valid
+    ttl_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+# --------------------------------------------------------------------------- #
+# Stage 4 Slice 4 Packet 002: Job Tool Authorizations
+# --------------------------------------------------------------------------- #
+
+
+class JobToolAuthorization(Base):
+    """Per-Job MCP tool authorization with owner check.
+
+    Per SLICE_4_GLM_IMPLEMENTATION_PACKET_002 §7.1:
+    - Each row belongs to exactly one job owner (CourseGenerationJob or PracticeJob)
+    - The owner check constraint ensures exactly one FK is non-null
+    - Partial unique indexes prevent duplicate (owner, capability) pairs
+    - Budget is tracked via max_calls/used_calls
+    - MCP snapshot is frozen at authorization time
+
+    The owner constraint uses portable CASE expressions so SQLite tests and
+    Postgres enforce the same invariant.
+    """
+    __tablename__ = "job_tool_authorizations"
+    __table_args__ = (
+        CheckConstraint(
+            "((CASE WHEN course_generation_job_id IS NOT NULL THEN 1 ELSE 0 END) + "
+            "(CASE WHEN practice_job_id IS NOT NULL THEN 1 ELSE 0 END)) = 1",
+            name="ck_job_tool_auth_one_owner",
+        ),
+        Index(
+            "uq_job_tool_auth_course_cap",
+            "course_generation_job_id",
+            "capability_id",
+            unique=True,
+            postgresql_where=text("course_generation_job_id IS NOT NULL"),
+            sqlite_where=text("course_generation_job_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_job_tool_auth_practice_cap",
+            "practice_job_id",
+            "capability_id",
+            unique=True,
+            postgresql_where=text("practice_job_id IS NOT NULL"),
+            sqlite_where=text("practice_job_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"), index=True, nullable=False)
+    capability_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    # Owner: exactly one non-null (enforced by check constraint)
+    course_generation_job_id: Mapped[str | None] = mapped_column(ForeignKey("course_generation_jobs.id"), index=True, nullable=True)
+    practice_job_id: Mapped[str | None] = mapped_column(ForeignKey("practice_jobs.id"), index=True, nullable=True)
+    # Budget
+    max_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    used_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # MCP snapshot (frozen at authorization time)
+    server_allowlist: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array
+    schema_hash_snapshot: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    protocol_version_snapshot: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Timestamps
+    authorized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

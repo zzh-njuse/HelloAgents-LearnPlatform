@@ -43,7 +43,7 @@
 4. 写 Learning Event、Mastery 与 Memory ADR：定义推断、提升、纠正、删除、过期和重算边界。
 5. 最后决定是否需要独立 Exercise Agent 或 Review Coach；不得先以多 Agent 形式替代产品合同。
 
-四切片方向已归档为 [Stage 4 四切片方向计划](STAGE_4_SLICE_PLAN.md)：Slice 1 练习/作答/反馈，Slice 2 掌握度/复习/Memory，Slice 3 教学 Skill，Slice 4 受控 MCP。该计划不提前批准任何 Slice 的实现。
+方向已更新为 [Stage 4 五切片方向计划](STAGE_4_SLICE_PLAN.md)：Slice 1 练习/作答/反馈，Slice 2 掌握度/复习/Memory，Slice 3 教学 Skill，Slice 4 受控 MCP，Slice 5 练习生成与评分链路稳定化。Slice 5 是 2026-07-23 根据真实 smoke 增加的收尾切片，不提前批准实现。
 
 ## 开始实现前 Gate
 

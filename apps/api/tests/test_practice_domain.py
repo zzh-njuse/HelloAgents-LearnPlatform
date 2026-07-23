@@ -60,9 +60,9 @@ def test_practice_set_artifact_accepts_mixed_types() -> None:
     validate_practice_citations(artifact, {"e1"})
 
 
-def test_practice_set_with_two_items_requires_both_types() -> None:
-    with pytest.raises(ValidationError):
-        PracticeSetArtifact.model_validate({"items": [_single_choice("q1"), _single_choice("q2")]})
+def test_practice_set_with_two_items_may_repeat_a_general_type() -> None:
+    artifact = PracticeSetArtifact.model_validate({"items": [_single_choice("q1"), _single_choice("q2")]})
+    assert [item.item_type for item in artifact.items] == ["single_choice", "single_choice"]
 
 
 def test_single_choice_requires_exactly_one_correct() -> None:

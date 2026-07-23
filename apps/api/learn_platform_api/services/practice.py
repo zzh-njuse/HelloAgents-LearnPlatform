@@ -9,6 +9,7 @@ creates an immutable attempt and a grading job. Deletion follows ADR 001.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -25,6 +26,7 @@ from learn_platform_api.db.models import (
     DocumentChunk,
     Lesson,
     LessonVersion,
+    JobToolAuthorization,
     PracticeAttempt,
     PracticeFeedback,
     PracticeItem,
@@ -144,10 +146,16 @@ def create_generation_job(db: Session, settings: Settings, workspace_id: str, co
     if _source_degraded(db, course_version_id):
         raise ValueError("source_snapshot_stale")
     output_language = payload.output_language or _lesson_language(db, lesson_id)
-    request_hash = _hash(f"{course_version_id}|{lesson_version_id}|{payload.item_count}|{payload.difficulty}|{output_language}")
+    legacy_request_hash = _hash(f"{course_version_id}|{lesson_version_id}|{payload.item_count}|{payload.difficulty}|{output_language}|{getattr(payload, 'item_type_mode', 'auto')}|{getattr(payload, 'code_languages', None)}")
+    request_hash = _hash(f"{course_version_id}|{lesson_version_id}|{payload.item_count}|{payload.difficulty}|{output_language}|{getattr(payload, 'item_type_mode', 'auto')}|{getattr(payload, 'code_languages', None)}|{getattr(payload, 'code_tool_authorized', False)}|{getattr(payload, 'science_tool_authorized', False)}")
+    compatible_hashes = {request_hash}
+    if not getattr(payload, "code_tool_authorized", False) and not getattr(payload, "science_tool_authorized", False):
+        compatible_hashes.add(legacy_request_hash)
+        if getattr(payload, "item_type_mode", "auto") == "auto" and getattr(payload, "code_languages", None) is None:
+            compatible_hashes.add(_hash(f"{course_version_id}|{lesson_version_id}|{payload.item_count}|{payload.difficulty}|{output_language}"))
     existing = _existing_idempotent_job(db, workspace_id, idempotency_key)
     if existing:
-        if existing.request_hash != request_hash:
+        if existing.request_hash not in compatible_hashes:
             raise ValueError("idempotency_key_conflict")
         return existing
     active = db.scalar(select(PracticeJob.id).where(
@@ -162,9 +170,32 @@ def create_generation_job(db: Session, settings: Settings, workspace_id: str, co
             lesson_id=lesson_id, lesson_version_id=lesson_version_id, output_language=output_language, difficulty=payload.difficulty,
             item_count=payload.item_count, request_hash=request_hash, status="queued", idempotency_key=idempotency_key,
             attempt_count=0, external_processing_ack_at=_now(),
+            item_type_mode=getattr(payload, 'item_type_mode', 'auto'),
+            code_languages=getattr(payload, 'code_languages', None),
         )
         db.add(job)
         db.flush()
+        from learn_platform_api.services.readiness import _read_capability_projection
+        requested_capabilities = (
+            ("code_execution", getattr(payload, "code_tool_authorized", False), ["run_code"], settings.practice_generation_max_tool_calls),
+            ("science_computation", getattr(payload, "science_tool_authorized", False), ["WolframAlpha", "WolframContext"], settings.practice_generation_max_tool_calls),
+        )
+        for capability_id, authorized, allowlist, max_calls in requested_capabilities:
+            if not authorized:
+                continue
+            projection = _read_capability_projection(db, capability_id)
+            if not projection or not projection.get("ok"):
+                raise ValueError(f"{capability_id}_unavailable")
+            db.add(JobToolAuthorization(
+                workspace_id=workspace_id,
+                capability_id=capability_id,
+                practice_job_id=job.id,
+                max_calls=max_calls,
+                used_calls=0,
+                server_allowlist=json.dumps(allowlist),
+                schema_hash_snapshot=projection.get("verified_schema_hash") or "",
+                protocol_version_snapshot="2025-11-25",
+            ))
         for source in db.scalars(select(CourseVersionSource).where(CourseVersionSource.course_version_id == course_version_id)):
             db.add(PracticeJobSource(practice_job_id=job.id, workspace_id=workspace_id, document_id=source.document_id, document_version_id=source.document_version_id))
         db.commit()
@@ -175,7 +206,7 @@ def create_generation_job(db: Session, settings: Settings, workspace_id: str, co
         # normal idempotent/conflict behavior instead of leaking the DB error.
         db.rollback()
         existing = db.scalar(select(PracticeJob).where(PracticeJob.workspace_id == workspace_id, PracticeJob.idempotency_key == idempotency_key))
-        if existing and existing.request_hash == request_hash:
+        if existing and existing.request_hash in compatible_hashes:
             return existing
         raise ValueError("idempotency_key_conflict")
     try:
@@ -224,9 +255,12 @@ def _set_read(db: Session, practice_set: PracticeSet) -> dict:
 
 def _item_read(db: Session, item: PracticeItem) -> dict:
     options = [{"option_key": option["option_key"], "text": option["text"]} for option in item.options] if item.options else None
+    # Slice 4 packet 002: include interaction_spec for coding items (public interface only)
+    interaction_spec = getattr(item, 'interaction_spec', None)
     return {
         "id": item.id, "ordinal": item.ordinal, "item_type": item.item_type, "stem": item.stem,
         "options": options, "citations": _item_citations(db, item.id),
+        "interaction_spec": interaction_spec,
     }
 
 
@@ -279,16 +313,18 @@ def submit_attempt(db: Session, settings: Settings, workspace_id: str, item_id: 
     item, practice_set = resolved
     if _source_degraded(db, practice_set.course_version_id):
         raise ValueError("source_snapshot_stale")
-    answer_key = (item.id, payload.option_key, payload.text)
+    answer_key = (item.id, payload.option_key, payload.text, getattr(payload, 'source_code', None), getattr(payload, "science_tool_authorized", False))
     existing = db.scalar(select(PracticeAttempt).where(PracticeAttempt.practice_item_id == item.id, PracticeAttempt.idempotency_key == idempotency_key))
     if existing:
-        if (existing.practice_item_id, existing.answer_payload.get("option_key"), existing.answer_payload.get("text")) != answer_key:
+        if (existing.practice_item_id, existing.answer_payload.get("option_key"), existing.answer_payload.get("text"), existing.source_code, bool(existing.answer_payload.get("science_tool_authorized"))) != answer_key:
             raise ValueError("idempotency_key_conflict")
         return existing
     ordinal = (db.scalar(select(func.max(PracticeAttempt.ordinal)).where(PracticeAttempt.practice_item_id == item.id)) or 0) + 1
     try:
         if item.item_type == "single_choice":
             return _submit_single_choice(db, workspace_id, item, payload, idempotency_key, ordinal)
+        if item.item_type == "coding":
+            return _submit_coding(db, settings, workspace_id, item, payload, idempotency_key, ordinal)
         return _submit_short_answer(db, settings, workspace_id, item, payload, idempotency_key, ordinal)
     except IntegrityError:
         db.rollback()
@@ -296,7 +332,7 @@ def submit_attempt(db: Session, settings: Settings, workspace_id: str, item_id: 
             PracticeAttempt.practice_item_id == item.id,
             PracticeAttempt.idempotency_key == idempotency_key,
         ))
-        if existing and (existing.practice_item_id, existing.answer_payload.get("option_key"), existing.answer_payload.get("text")) == answer_key:
+        if existing and (existing.practice_item_id, existing.answer_payload.get("option_key"), existing.answer_payload.get("text"), existing.source_code, bool(existing.answer_payload.get("science_tool_authorized"))) == answer_key:
             return existing
         raise ValueError("idempotency_key_conflict")
 
@@ -358,8 +394,8 @@ def _submit_short_answer(db: Session, settings: Settings, workspace_id: str, ite
     if len(text) > SHORT_ANSWER_MAX_CHARS:
         raise ValueError("answer_too_large")
     attempt = PracticeAttempt(
-        workspace_id=workspace_id, practice_item_id=item.id, ordinal=ordinal, item_type="short_answer",
-        answer_payload={"text": text}, idempotency_key=idempotency_key, status="grading",
+        workspace_id=workspace_id, practice_item_id=item.id, ordinal=ordinal, item_type=item.item_type,
+        answer_payload={"text": text, "science_tool_authorized": bool(getattr(payload, "science_tool_authorized", False))}, idempotency_key=idempotency_key, status="grading",
         external_processing_ack_at=_now(),
     )
     db.add(attempt)
@@ -375,6 +411,82 @@ def _submit_short_answer(db: Session, settings: Settings, workspace_id: str, ite
     job.output_language = practice_set.output_language if practice_set else "zh-CN"
     db.add(job)
     db.flush()
+    if item.item_type == "scientific" and getattr(payload, "science_tool_authorized", False):
+        from learn_platform_api.services.readiness import _read_capability_projection
+        projection = _read_capability_projection(db, "science_computation")
+        if projection and projection.get("ok"):
+            db.add(JobToolAuthorization(
+                workspace_id=workspace_id,
+                capability_id="science_computation",
+                practice_job_id=job.id,
+                max_calls=settings.practice_grading_max_science_calls,
+                used_calls=0,
+                server_allowlist=json.dumps(["WolframAlpha", "WolframContext"]),
+                schema_hash_snapshot=projection.get("verified_schema_hash") or "",
+                protocol_version_snapshot="2025-11-25",
+            ))
+    attempt.practice_job_id = job.id
+    db.commit()
+    db.refresh(attempt)
+    try:
+        enqueue_practice_job(settings, job.id)
+    except Exception:
+        attempt.status = "queue_failed"; attempt.error_code = "queue_unavailable"; attempt.error_message = "评分队列暂时不可用"
+        job.status = "queue_failed"; job.error_code = "queue_unavailable"
+        db.commit()
+    return attempt
+
+
+SOURCE_CODE_MAX_CHARS = 20_000  # Per MCP contract SOURCE_CODE_MAX_CHARS
+
+
+def _submit_coding(db: Session, settings: Settings, workspace_id: str, item: PracticeItem, payload, idempotency_key: str, ordinal: int) -> PracticeAttempt:
+    """Submit a coding attempt with source_code.
+
+    Per Spec 004 §6.3: the attempt carries source_code which will be
+    graded deterministically via MCP execution against the item's
+    hidden tests. The grading job is enqueued same as short_answer.
+    """
+    if not payload.external_processing_ack:
+        raise ValueError("external_processing_required")
+    source_code = (getattr(payload, 'source_code', None) or "")
+    if not source_code.strip():
+        raise ValueError("source_code_required")
+    if len(source_code) > SOURCE_CODE_MAX_CHARS:
+        raise ValueError("source_code_too_large")
+    attempt = PracticeAttempt(
+        workspace_id=workspace_id, practice_item_id=item.id, ordinal=ordinal, item_type="coding",
+        answer_payload={"source_code_hash": _hash(source_code)}, source_code=source_code,
+        idempotency_key=idempotency_key, status="grading",
+        external_processing_ack_at=_now(),
+    )
+    db.add(attempt)
+    db.flush()
+    job = PracticeJob(
+        workspace_id=workspace_id, job_type="grade_attempt", practice_attempt_id=attempt.id,
+        output_language="zh-CN", difficulty="standard", item_count=1,
+        request_hash=_hash(f"grade|{attempt.id}"), status="queued", idempotency_key=f"grade-{attempt.id}",
+        attempt_count=0, external_processing_ack_at=_now(),
+    )
+    # Preserve the item's language on the grading job for consistent feedback.
+    practice_set = db.get(PracticeSet, item.practice_set_id)
+    job.output_language = practice_set.output_language if practice_set else "zh-CN"
+    db.add(job)
+    db.flush()
+    from learn_platform_api.services.readiness import _read_capability_projection
+    projection = _read_capability_projection(db, "code_execution")
+    if not projection or not projection.get("ok"):
+        raise ValueError("code_execution_unavailable")
+    db.add(JobToolAuthorization(
+        workspace_id=workspace_id,
+        capability_id="code_execution",
+        practice_job_id=job.id,
+        max_calls=1,
+        used_calls=0,
+        server_allowlist=json.dumps(["run_code"]),
+        schema_hash_snapshot=projection.get("verified_schema_hash") or "",
+        protocol_version_snapshot="2025-11-25",
+    ))
     attempt.practice_job_id = job.id
     db.commit()
     db.refresh(attempt)
@@ -406,7 +518,8 @@ def _attempt_read(db: Session, attempt: PracticeAttempt) -> dict:
     return {
         "id": attempt.id, "practice_item_id": attempt.practice_item_id, "ordinal": attempt.ordinal, "item_type": attempt.item_type,
         "status": attempt.status, "option_key": attempt.answer_payload.get("option_key") if attempt.item_type == "single_choice" else None,
-        "text": attempt.answer_payload.get("text") if attempt.item_type == "short_answer" else None,
+        "text": attempt.answer_payload.get("text") if attempt.item_type in {"short_answer", "scientific"} else None,
+        "source_code": attempt.source_code if attempt.item_type == "coding" else None,
         "practice_job_id": attempt.practice_job_id, "error_code": attempt.error_code, "error_message": attempt.error_message,
         "created_at": attempt.created_at.isoformat(), "completed_at": attempt.completed_at.isoformat() if attempt.completed_at else None,
         "feedback": _feedback_read(db, attempt, feedback),
@@ -420,6 +533,32 @@ def _feedback_read(db: Session, attempt: PracticeAttempt, feedback: PracticeFeed
     return {
         "verdict": feedback.verdict, "score": feedback.score, "is_ai_graded": bool(feedback.is_ai_graded),
         "criterion_results": feedback.criterion_results or [], "feedback_blocks": feedback.feedback_blocks, "citations": citations,
+        # Slice 4 packet 002: coding execution summary
+        "coding_tests_passed": getattr(feedback, 'coding_tests_passed', None),
+        "coding_tests_total": getattr(feedback, 'coding_tests_total', None),
+        "coding_error_categories": getattr(feedback, 'coding_error_categories', None),
+        "coding_public_cases": getattr(feedback, 'coding_public_cases', None),
+        "science_verification": _science_verification_read(db, attempt.practice_job_id, "VerifyScientificAttempt", "learner_final_result") if attempt.item_type == "scientific" else None,
+    }
+
+
+def _science_verification_read(db: Session, job_id: str | None, tool_name: str, purpose: str) -> dict:
+    if not job_id:
+        return {"used": False, "status": "not_used", "tool": None, "purpose": purpose, "checked_at": None}
+    call = db.scalar(
+        select(AgentToolCall)
+        .join(AgentRun, AgentToolCall.agent_run_id == AgentRun.id)
+        .where(AgentRun.practice_job_id == job_id, AgentToolCall.tool_name == tool_name)
+        .order_by(AgentToolCall.created_at.desc())
+    )
+    if call is None:
+        return {"used": False, "status": "not_used", "tool": None, "purpose": purpose, "checked_at": None}
+    return {
+        "used": True,
+        "status": "verified" if call.status == "succeeded" else "failed",
+        "tool": "Wolfram",
+        "purpose": purpose,
+        "checked_at": call.created_at,
     }
 
 
@@ -561,6 +700,7 @@ def cleanup_set(db: Session, set_id: str) -> bool:
     db.execute(delete(PracticeItem).where(PracticeItem.practice_set_id == set_id))
     if job_ids:
         db.execute(delete(PracticeJobSource).where(PracticeJobSource.practice_job_id.in_(job_ids)))
+        db.execute(delete(JobToolAuthorization).where(JobToolAuthorization.practice_job_id.in_(job_ids)))
         db.execute(delete(PracticeJob).where(PracticeJob.id.in_(job_ids)))
     db.delete(practice_set)
     db.flush()
@@ -594,6 +734,7 @@ def delete_attempt(db: Session, settings: Settings, workspace_id: str, attempt_i
     _disconnect_practice_cycle(db, attempt_ids=[attempt_id], job_ids=[grade_job_id] if grade_job_id else None)
     if grade_job_id:
         db.execute(delete(PracticeJobSource).where(PracticeJobSource.practice_job_id == grade_job_id))
+        db.execute(delete(JobToolAuthorization).where(JobToolAuthorization.practice_job_id == grade_job_id))
         db.execute(delete(PracticeJob).where(PracticeJob.id == grade_job_id))
     db.delete(attempt)
     db.flush()
@@ -633,5 +774,6 @@ def hard_delete_workspace_practice(db: Session, workspace_id: str) -> None:
     db.execute(delete(PracticeItemCitation).where(PracticeItemCitation.practice_item_id.in_(item_ids)))
     db.execute(delete(PracticeItem).where(PracticeItem.workspace_id == workspace_id))
     db.execute(delete(PracticeJobSource).where(PracticeJobSource.workspace_id == workspace_id))
+    db.execute(delete(JobToolAuthorization).where(JobToolAuthorization.practice_job_id.in_(job_ids)))
     db.execute(delete(PracticeJob).where(PracticeJob.workspace_id == workspace_id))
     db.execute(delete(PracticeSet).where(PracticeSet.workspace_id == workspace_id))

@@ -146,7 +146,7 @@ export interface CourseReader { course: Course; version: CourseVersion }
 export interface LessonCompletion { id: string; course_id: string; course_version_id: string; lesson_id: string; lesson_version_id: string; lesson_title: string; is_current_version: boolean; completed_at: string }
 export interface TutorCitation { citation_id: string; block_key: string; document_name: string; heading_path: string[]; start_offset: number; end_offset: number; page_start: number | null; page_end: number | null }
 export interface TutorTeachingSkill { id: string; display_name: string; version: string }
-export interface TutorTurn { id: string; session_id: string; ordinal: number; attempt_number: number; status: string; question: string; scope: "course" | "lesson"; section_id: string | null; lesson_id: string | null; lesson_version_id: string | null; answer_blocks: { block_key: string; type: string; text: string; citation_ids: string[]; certainty: string | null }[] | null; citations: TutorCitation[]; error_code: string | null; error_message: string | null; created_at: string; completed_at: string | null; memory_count: number; completion_count: number; teaching_skill: TutorTeachingSkill | null }
+export interface TutorTurn { id: string; session_id: string; ordinal: number; attempt_number: number; status: string; question: string; scope: "course" | "lesson"; section_id: string | null; lesson_id: string | null; lesson_version_id: string | null; answer_blocks: { block_key: string; type: string; text: string; citation_ids: string[]; certainty: string | null }[] | null; citations: TutorCitation[]; error_code: string | null; error_message: string | null; created_at: string; completed_at: string | null; memory_count: number; completion_count: number; teaching_skill: TutorTeachingSkill | null; science_tool_used: boolean; science_tool_call_count: number; code_tool_used: boolean; code_tool_call_count: number }
 export interface TutorSession { id: string; workspace_id: string; course_id: string; course_version_id: string; status: string; provider: string; model: string; created_at: string; turns: TutorTurn[] }
 export interface TutorSkillCapability { teaching_skill: TutorTeachingSkill }
 
@@ -388,7 +388,7 @@ export async function deleteTutorSession(workspaceId: string, sessionId: string)
   return request<void>(`/api/v1/workspaces/${workspaceId}/tutor-sessions/${sessionId}`, { method: "DELETE" });
 }
 
-export async function createTutorTurn(workspaceId: string, sessionId: string, payload: { question: string; scope: "course" | "lesson"; section_id?: string; lesson_id?: string; lesson_version_id?: string }, idempotencyKey: string = crypto.randomUUID()): Promise<TutorTurn> {
+export async function createTutorTurn(workspaceId: string, sessionId: string, payload: { question: string; scope: "course" | "lesson"; section_id?: string; lesson_id?: string; lesson_version_id?: string; science_tool_authorized?: boolean; code_tool_authorized?: boolean; code_run_id?: string }, idempotencyKey: string = crypto.randomUUID()): Promise<TutorTurn> {
   return request<TutorTurn>(`/api/v1/workspaces/${workspaceId}/tutor-sessions/${sessionId}/turns`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify(payload) });
 }
 
@@ -422,25 +422,26 @@ export async function fetchAgentRun(workspaceId: string, runId: string, signal?:
   return request<AgentRunDetail>(`/api/v1/workspaces/${workspaceId}/agent-runs/${runId}`, { signal });
 }
 
-export type PracticeItemType = "single_choice" | "short_answer";
+export type PracticeItemType = "single_choice" | "short_answer" | "coding" | "scientific";
 export type PracticeDifficulty = "easy" | "standard" | "hard";
 
 export interface PracticeCitation { citation_key: string; document_name: string; heading_path: string[]; page_start: number | null; page_end: number | null; available: boolean }
 export interface PracticeOptionRead { option_key: string; text: string }
-export interface PracticeItemRead { id: string; ordinal: number; item_type: PracticeItemType; stem: string; options: PracticeOptionRead[] | null; citations: PracticeCitation[] }
+export interface PracticeItemRead { id: string; ordinal: number; item_type: PracticeItemType; stem: string; options: PracticeOptionRead[] | null; citations: PracticeCitation[]; interaction_spec?: { language?: "python" | "java" | "cpp"; starter_code?: string; input_description?: string; output_description?: string; constraints?: string[]; public_examples?: Array<{ input: string; expected_output: string; weight: number }>; contract?: string; runtime?: string; time_limit_seconds?: number; output_limit_bytes?: number; unit?: string | null; equivalence_rule?: string } | null }
 export interface PracticeSetRead { id: string; workspace_id: string; course_id: string; lesson_id: string; lesson_version_id: string; output_language: "zh-CN" | "en"; difficulty: PracticeDifficulty; item_count: number; lifecycle_status: string; source_degraded: boolean; created_at: string; items: PracticeItemRead[] }
 export interface PracticeSetListItem { id: string; lesson_version_id: string; output_language: "zh-CN" | "en"; difficulty: PracticeDifficulty; item_count: number; lifecycle_status: string; source_degraded: boolean; created_at: string; latest_job: PracticeJobRead | null }
-export interface PracticeJobRead { id: string; job_type: "generate_set" | "grade_attempt"; practice_set_id: string | null; practice_attempt_id: string | null; status: string; attempt_count: number; error_code: string | null; error_message: string | null; created_at: string; updated_at: string }
+export interface ScienceVerificationRead { used: boolean; status: "verified" | "failed" | "not_used"; tool: "Wolfram" | null; purpose: "reference_answer" | "learner_final_result"; checked_at: string | null }
+export interface PracticeJobRead { id: string; job_type: "generate_set" | "grade_attempt"; practice_set_id: string | null; practice_attempt_id: string | null; status: string; attempt_count: number; error_code: string | null; error_message: string | null; created_at: string; updated_at: string; science_verification?: ScienceVerificationRead | null }
 export interface PracticeFeedbackBlockRead { block_key: string; type: "explanation" | "improvement" | "reference" | "limitation"; text: string; citation_ids: string[]; option_key: string | null }
 export interface PracticeCriterionResultRead { criterion_key: string; met: "full" | "partial" | "none"; note: string }
-export interface PracticeFeedbackRead { verdict: "correct" | "partially_correct" | "incorrect" | "ungradable"; score: number | null; is_ai_graded: boolean; criterion_results: PracticeCriterionResultRead[]; feedback_blocks: PracticeFeedbackBlockRead[]; citations: PracticeCitation[] }
-export interface PracticeAttemptRead { id: string; practice_item_id: string; ordinal: number; item_type: PracticeItemType; status: string; option_key: string | null; text: string | null; practice_job_id: string | null; error_code: string | null; error_message: string | null; created_at: string; completed_at: string | null; feedback: PracticeFeedbackRead | null }
+export interface PracticeFeedbackRead { verdict: "correct" | "partially_correct" | "incorrect" | "ungradable"; score: number | null; is_ai_graded: boolean; criterion_results: PracticeCriterionResultRead[]; feedback_blocks: PracticeFeedbackBlockRead[]; citations: PracticeCitation[]; coding_tests_passed?: number | null; coding_tests_total?: number | null; coding_error_categories?: string[] | null; coding_public_cases?: Array<{ test_index: number; passed: boolean }> | null; science_verification?: ScienceVerificationRead | null }
+export interface PracticeAttemptRead { id: string; practice_item_id: string; ordinal: number; item_type: PracticeItemType; status: string; option_key: string | null; text: string | null; source_code?: string | null; practice_job_id: string | null; error_code: string | null; error_message: string | null; created_at: string; completed_at: string | null; feedback: PracticeFeedbackRead | null }
 
 export async function fetchPracticeSets(workspaceId: string, courseId: string, courseVersionId: string, lessonId: string, lessonVersionId: string): Promise<PracticeSetListItem[]> {
   return request<PracticeSetListItem[]>(`/api/v1/workspaces/${workspaceId}/courses/${courseId}/versions/${courseVersionId}/lessons/${lessonId}/versions/${lessonVersionId}/practice-sets`);
 }
 
-export async function createPracticeSet(workspaceId: string, courseId: string, courseVersionId: string, lessonId: string, lessonVersionId: string, payload: { item_count: number; difficulty: PracticeDifficulty; output_language?: "zh-CN" | "en" }, idempotencyKey: string = crypto.randomUUID()): Promise<PracticeJobRead> {
+export async function createPracticeSet(workspaceId: string, courseId: string, courseVersionId: string, lessonId: string, lessonVersionId: string, payload: { item_count: number; difficulty: PracticeDifficulty; output_language?: "zh-CN" | "en"; item_type_mode?: "auto" | "general_only" | "require_coding" | "require_science"; code_languages?: string[] | null; code_tool_authorized?: boolean; science_tool_authorized?: boolean }, idempotencyKey: string = crypto.randomUUID()): Promise<PracticeJobRead> {
   return request<PracticeJobRead>(`/api/v1/workspaces/${workspaceId}/courses/${courseId}/versions/${courseVersionId}/lessons/${lessonId}/versions/${lessonVersionId}/practice-sets`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ ...payload, external_processing_ack: true }) });
 }
 
@@ -464,7 +465,7 @@ export async function retryPracticeJob(workspaceId: string, jobId: string): Prom
   return request<PracticeJobRead>(`/api/v1/workspaces/${workspaceId}/practice-jobs/${jobId}/retry`, { method: "POST" });
 }
 
-export async function submitPracticeAttempt(workspaceId: string, itemId: string, payload: { external_processing_ack: boolean; option_key?: string; text?: string }, idempotencyKey: string = crypto.randomUUID()): Promise<PracticeAttemptRead> {
+export async function submitPracticeAttempt(workspaceId: string, itemId: string, payload: { external_processing_ack: boolean; option_key?: string; text?: string; source_code?: string; science_tool_authorized?: boolean }, idempotencyKey: string = crypto.randomUUID()): Promise<PracticeAttemptRead> {
   return request<PracticeAttemptRead>(`/api/v1/workspaces/${workspaceId}/practice-items/${itemId}/attempts`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify(payload) });
 }
 
@@ -579,4 +580,127 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+// ---------------------------------------------------------------------------
+// Slice 4: MCP Capabilities & Code Lab
+// ---------------------------------------------------------------------------
+
+export interface McpCapability {
+  capability: string;
+  status: "ready" | "unavailable" | "degraded";
+  detail: string;
+}
+
+export interface McpPolicy {
+  workspace_id: string;
+  code_execution_enabled: boolean;
+  revision: number;
+}
+
+export interface CodeRunCreate {
+  language: "python" | "java" | "cpp";
+  source_code: string;
+  stdin?: string;
+  course_id?: string | null;
+  course_version_id?: string | null;
+  lesson_id?: string | null;
+  lesson_version_id?: string | null;
+}
+
+export interface CodeRun {
+  id: string;
+  workspace_id: string;
+  language: string;
+  status: string;
+  course_id: string | null;
+  lesson_id: string | null;
+  exit_code: number | null;
+  duration_ms: number | null;
+  runtime: string | null;
+  stdout_truncated: boolean;
+  stderr_truncated: boolean;
+  created_at: string;
+  completed_at: string | null;
+  deleted_at: string | null;
+}
+
+export interface CodeRunDetail extends CodeRun {
+  source_code: string;
+  stdin: string;
+  compile_output: string;
+  stdout: string;
+  stderr: string;
+}
+
+export async function listMcpCapabilities(
+  workspaceId: string,
+): Promise<McpCapability[]> {
+  return request(`/api/v1/workspaces/${workspaceId}/mcp-capabilities`);
+}
+
+export async function getMcpPolicy(workspaceId: string): Promise<McpPolicy> {
+  return request(`/api/v1/workspaces/${workspaceId}/mcp-policy`);
+}
+
+export async function patchMcpPolicy(
+  workspaceId: string,
+  patch: { code_execution_enabled: boolean },
+): Promise<McpPolicy> {
+  return request(`/api/v1/workspaces/${workspaceId}/mcp-policy`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function createCodeRun(
+  workspaceId: string,
+  body: CodeRunCreate,
+  idempotencyKey: string,
+): Promise<CodeRun> {
+  return request(`/api/v1/workspaces/${workspaceId}/code-runs`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listCodeRuns(
+  workspaceId: string,
+  limit = 20,
+  offset = 0,
+): Promise<CodeRun[]> {
+  return request(
+    `/api/v1/workspaces/${workspaceId}/code-runs?limit=${limit}&offset=${offset}`,
+  );
+}
+
+export async function getCodeRun(
+  workspaceId: string,
+  runId: string,
+): Promise<CodeRunDetail> {
+  return request(`/api/v1/workspaces/${workspaceId}/code-runs/${runId}`);
+}
+
+export async function cancelCodeRun(
+  workspaceId: string,
+  runId: string,
+): Promise<CodeRun> {
+  return request(
+    `/api/v1/workspaces/${workspaceId}/code-runs/${runId}/cancel`,
+    { method: "POST" },
+  );
+}
+
+export async function deleteCodeRun(
+  workspaceId: string,
+  runId: string,
+): Promise<void> {
+  return request(`/api/v1/workspaces/${workspaceId}/code-runs/${runId}`, {
+    method: "DELETE",
+  });
 }

@@ -21,14 +21,33 @@ class TutorTurnCreate(BaseModel):
     section_id: str | None = None
     lesson_id: str | None = None
     lesson_version_id: str | None = None
+    # Slice 4: per-Turn science tool authorization (Spec 004 §6.1, ADR 006 §2.7).
+    # Default false; enters idempotency hash. Client cannot specify server,
+    # Tool, or budget — only a boolean toggle.
+    science_tool_authorized: bool = False
+    # Slice 4 packet 002: per-Turn code tool authorization (Spec 004 §8.1).
+    # Default false; enters idempotency hash. Independent from science auth.
+    code_tool_authorized: bool = False
+    # Slice 4: optional code run safe summary for this Turn (Spec 004 §5.1, §9).
+    # Must be a terminal, non-deleted CodeLabRun in the same workspace.
+    # At most one per Turn; consumed on send, not inherited by next Turn.
+    code_run_id: str | None = None
 
-    @field_validator("section_id", "lesson_id", "lesson_version_id", mode="before")
+    @field_validator("question")
+    @classmethod
+    def validate_question(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("question cannot be blank")
+        return value
+
+    @field_validator("section_id", "lesson_id", "lesson_version_id", "code_run_id", mode="before")
     @classmethod
     def validate_identifier(cls, value):
         if value is None:
             return None
         if not isinstance(value, str) or not value.strip():
-            raise ValueError("lesson identifiers cannot be blank")
+            raise ValueError("identifiers cannot be blank")
         return value.strip()
 
     @model_validator(mode="after")
@@ -47,6 +66,7 @@ class TutorAnswerBlock(BaseModel):
     type: Literal[
         "explanation", "example", "check_question", "self_check", "limitation", "memory_summary",
         "direct_answer", "learning_diagnosis", "next_action",
+        "science_observation", "code_observation",
     ]
     text: str
     citation_ids: list[str]
@@ -109,6 +129,12 @@ class TutorTurnRead(BaseModel):
     memory_count: int = 0
     completion_count: int = 0
     teaching_skill: TutorTeachingSkillRead | None = None
+    # Slice 4: science tool usage summary (Spec 004 §6.1, ADR 006 §2.7)
+    science_tool_used: bool = False
+    science_tool_call_count: int = 0
+    # Slice 4 packet 002: code tool usage summary (Spec 004 §8.1)
+    code_tool_used: bool = False
+    code_tool_call_count: int = 0
 
 
 class TutorSessionRead(BaseModel):

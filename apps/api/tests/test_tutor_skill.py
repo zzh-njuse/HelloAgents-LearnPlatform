@@ -29,7 +29,7 @@ from learn_platform_api.services.tutor import resolve_teaching_skill_snapshot
 def test_registry_loads_current_published_skill_with_stable_hash():
     skill_id, version = current_published()
     assert skill_id == "evidence-guided-diagnostic-scaffold"
-    assert version == "2"
+    assert version == "4"
     skill = load_skill(skill_id, version)
     assert skill.display_name == "诊断式支架"
     assert len(skill.content_hash) == 64
@@ -298,7 +298,7 @@ def test_tutor_skill_capability_endpoint(client: TestClient, db_session: Session
     body = response.json()
     assert body["teaching_skill"]["id"] == "evidence-guided-diagnostic-scaffold"
     assert body["teaching_skill"]["display_name"] == "诊断式支架"
-    assert body["teaching_skill"]["version"] == "2"
+    assert body["teaching_skill"]["version"] == "4"
     # Hash, prompt body and file path are never published.
     blob = str(body)
     for forbidden in ("hash", "prompt", "path", "body", ".md"):

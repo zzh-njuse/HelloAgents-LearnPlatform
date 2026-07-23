@@ -36,6 +36,35 @@ CITABLE_BLOCK_TYPES = frozenset({"direct_answer", "explanation", "example"})
 TEACHING_MOVES = ("focus", "probe", "explain", "example", "next_action", "check")
 
 
+class ScienceRequest(BaseModel):
+    """A single science tool request from the plan (Spec 004 §6, ADR 006 §2.2).
+
+    Only allowed when the current Turn has science_tool_authorized=true.
+    Tool must be in the fixed whitelist: WolframAlpha, WolframContext.
+    """
+
+    tool: Literal["WolframAlpha", "WolframContext"]
+    arguments: dict[str, str] = Field(default_factory=dict, max_length=10)
+
+    model_config = {"extra": "forbid"}
+
+
+class CodeRequest(BaseModel):
+    """A single code execution request from the plan (Spec 004 §8.2, ADR 006 §2.5).
+
+    Only allowed when the current Turn has code_tool_authorized=true.
+    Language must be in the fixed whitelist: python, java, cpp.
+    Code must be directly related to the current question, max 12000 chars.
+    No file/network/package/shell access.
+    """
+
+    language: Literal["python", "java", "cpp"]
+    source_code: str = Field(min_length=1, max_length=12000)
+    stdin: str = Field(default="", max_length=8000)
+
+    model_config = {"extra": "forbid"}
+
+
 class TeachingPlan(BaseModel):
     """First provider call: how the skill will approach the question."""
 
@@ -43,6 +72,8 @@ class TeachingPlan(BaseModel):
     queries: list[str] = Field(min_length=1, max_length=3)
     learning_context_use: LearningContextUse
     teaching_moves: list[TeachingMove] = Field(min_length=1, max_length=3)
+    science_requests: list[ScienceRequest] = Field(default_factory=list, max_length=3)
+    code_requests: list[CodeRequest] = Field(default_factory=list, max_length=2)
 
     model_config = {"extra": "forbid"}
 
@@ -89,7 +120,7 @@ class TeachingAnswerBlock(BaseModel):
     """
 
     block_key: str = Field(pattern=r"^[A-Za-z0-9_-]{1,100}$")
-    type: Literal["direct_answer", "learning_diagnosis", "explanation", "example", "next_action", "check_question", "limitation"]
+    type: Literal["direct_answer", "learning_diagnosis", "explanation", "example", "next_action", "check_question", "limitation", "science_observation", "code_observation"]
     text: str = Field(min_length=1, max_length=8000)
     citation_ids: list[str] = Field(default_factory=list, max_length=10)
     certainty: Certainty | None = None
@@ -124,6 +155,12 @@ class TeachingAnswerBlock(BaseModel):
         if self.type == "next_action" and self.citation_ids:
             # next_action describes a study action, not a course fact.
             raise ValueError("next_action must not cite course evidence")
+        if self.type == "science_observation" and self.citation_ids:
+            # science_observation is from an external tool, not course evidence.
+            raise ValueError("science_observation must not cite course evidence")
+        if self.type == "code_observation" and self.citation_ids:
+            # code_observation is from code execution, not course evidence.
+            raise ValueError("code_observation must not cite course evidence")
         return self
 
 

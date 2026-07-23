@@ -86,6 +86,11 @@ services:
       INGESTION_HEARTBEAT_SECONDS: ${INGESTION_HEARTBEAT_SECONDS:-30}
       INGESTION_MAX_ATTEMPTS: ${INGESTION_MAX_ATTEMPTS:-3}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:5173}
+      # Slice 4: MCP capabilities (optional, disabled by default)
+      # API only needs to know IF capabilities are configured for readiness;
+      # it does NOT call them directly — workers do.
+      MCP_EXECUTION_ADAPTER_URL: ${MCP_EXECUTION_ADAPTER_URL:-}
+      WOLFRAM_MCP_ENABLED: ${WOLFRAM_MCP_ENABLED:-false}
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000"
     volumes:
@@ -153,6 +158,19 @@ services:
       INGESTION_LEASE_SECONDS: ${INGESTION_LEASE_SECONDS:-120}
       INGESTION_HEARTBEAT_SECONDS: ${INGESTION_HEARTBEAT_SECONDS:-30}
       INGESTION_MAX_ATTEMPTS: ${INGESTION_MAX_ATTEMPTS:-3}
+      # Slice 4: Wolfram science tool — only the Tutor worker needs these
+      WOLFRAM_MCP_ENABLED: ${WOLFRAM_MCP_ENABLED:-false}
+      WOLFRAM_MCP_URL: ${WOLFRAM_MCP_URL:-https://agenttools.wolfram.com/mcp}
+      WOLFRAM_MCP_API_KEY: ${WOLFRAM_MCP_API_KEY:-}
+      WOLFRAM_MAX_CALLS_PER_TURN: ${WOLFRAM_MAX_CALLS_PER_TURN:-3}
+      # Slice 4 packet 002: execution adapter URL for Lesson/Practice/Tutor code calls
+      MCP_EXECUTION_ADAPTER_URL: ${MCP_EXECUTION_ADAPTER_URL:-http://mcp-execution:8100}
+      # Slice 4 packet 002: dual Tool budgets
+      TUTOR_MAX_MCP_CALLS_PER_TURN: ${TUTOR_MAX_MCP_CALLS_PER_TURN:-3}
+      TUTOR_MAX_CODE_CALLS_PER_TURN: ${TUTOR_MAX_CODE_CALLS_PER_TURN:-2}
+      TUTOR_MAX_SCIENCE_CALLS_PER_TURN: ${TUTOR_MAX_SCIENCE_CALLS_PER_TURN:-3}
+      TUTOR_MAX_DECISION_STEPS: ${TUTOR_MAX_DECISION_STEPS:-8}
+      LESSON_GENERATION_MAX_SCIENCE_CALLS: ${LESSON_GENERATION_MAX_SCIENCE_CALLS:-3}
     volumes:
       - ./storage:/app/storage
     depends_on:
@@ -162,6 +180,11 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      mcp-execution:
+        condition: service_started
+    networks:
+      - default
+      - mcp-execution-net
 
   practice-worker:
     restart: unless-stopped
@@ -188,6 +211,7 @@ services:
       PRACTICE_GENERATION_MAX_STEPS: ${PRACTICE_GENERATION_MAX_STEPS:-6}
       PRACTICE_GENERATION_MAX_SEARCHES: ${PRACTICE_GENERATION_MAX_SEARCHES:-3}
       PRACTICE_GENERATION_MAX_PROVIDER_CALLS: ${PRACTICE_GENERATION_MAX_PROVIDER_CALLS:-6}
+      PRACTICE_GENERATION_MAX_ATTEMPT_STEPS: ${PRACTICE_GENERATION_MAX_ATTEMPT_STEPS:-20}
       PRACTICE_GENERATION_MAX_EVIDENCE_TOKENS: ${PRACTICE_GENERATION_MAX_EVIDENCE_TOKENS:-24000}
       PRACTICE_GENERATION_MAX_OUTPUT_TOKENS: ${PRACTICE_GENERATION_MAX_OUTPUT_TOKENS:-12000}
       PRACTICE_GENERATION_SEARCH_TOP_K: ${PRACTICE_GENERATION_SEARCH_TOP_K:-5}
@@ -201,6 +225,14 @@ services:
       INGESTION_LEASE_SECONDS: ${INGESTION_LEASE_SECONDS:-120}
       INGESTION_HEARTBEAT_SECONDS: ${INGESTION_HEARTBEAT_SECONDS:-30}
       INGESTION_MAX_ATTEMPTS: ${INGESTION_MAX_ATTEMPTS:-3}
+      # Slice 4 packet 002: execution adapter + science tool for Practice
+      MCP_EXECUTION_ADAPTER_URL: ${MCP_EXECUTION_ADAPTER_URL:-http://mcp-execution:8100}
+      WOLFRAM_MCP_ENABLED: ${WOLFRAM_MCP_ENABLED:-false}
+      WOLFRAM_MCP_URL: ${WOLFRAM_MCP_URL:-https://agenttools.wolfram.com/mcp}
+      WOLFRAM_MCP_API_KEY: ${WOLFRAM_MCP_API_KEY:-}
+      PRACTICE_GENERATION_MAX_TOOL_CALLS: ${PRACTICE_GENERATION_MAX_TOOL_CALLS:-10}
+      PRACTICE_CODING_MAX_REF_CALLS: ${PRACTICE_CODING_MAX_REF_CALLS:-1}
+      PRACTICE_GRADING_MAX_SCIENCE_CALLS: ${PRACTICE_GRADING_MAX_SCIENCE_CALLS:-2}
     volumes:
       - ./storage:/app/storage
     depends_on:
@@ -210,6 +242,85 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      mcp-execution:
+        condition: service_started
+    networks:
+      - default
+      - mcp-execution-net
+
+  # Slice 4: MCP execution adapter — does NOT publish host ports.
+  # Connects to admin-configured execution backend via EXECUTION_BACKEND_URL.
+  # Uses isolated network — cannot access Postgres/Qdrant/Redis/storage.
+  mcp-execution:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: apps/mcp_execution/Dockerfile
+    environment:
+      EXECUTION_BACKEND_URL: ${EXECUTION_BACKEND_URL:-}
+      EXECUTION_BACKEND_TIMEOUT_SECONDS: ${EXECUTION_BACKEND_TIMEOUT_SECONDS:-15}
+      MCP_EXECUTION_PORT: "8100"
+    networks:
+      - mcp-execution-net
+    # No ports published to host — only internal access
+
+  # Slice 4: Code lab worker — processes code execution jobs.
+  # Only needs DB + Redis + MCP execution adapter URL.
+  # Does NOT need storage, Qdrant, embedding/generation keys, or Wolfram.
+  code-lab-worker:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["rq", "worker", "--with-scheduler", "--url", "redis://redis:6379/0", "learn-platform-code-lab"]
+    environment:
+      APP_NAME: ${APP_NAME:-HelloAgents Learn}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-hello_agents}:${POSTGRES_PASSWORD:-hello_agents}@postgres:5432/${POSTGRES_DB:-hello_agents}
+      REDIS_URL: redis://redis:6379/0
+      # MCP execution adapter URL (internal service)
+      MCP_EXECUTION_ADAPTER_URL: ${MCP_EXECUTION_ADAPTER_URL:-http://mcp-execution:8100}
+      CODE_LAB_LEASE_SECONDS: ${CODE_LAB_LEASE_SECONDS:-120}
+      CODE_LAB_HEARTBEAT_SECONDS: ${CODE_LAB_HEARTBEAT_SECONDS:-30}
+      CODE_LAB_MAX_ATTEMPTS: ${CODE_LAB_MAX_ATTEMPTS:-3}
+      CODE_LAB_EXECUTION_TIMEOUT_SECONDS: ${CODE_LAB_EXECUTION_TIMEOUT_SECONDS:-15}
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mcp-execution:
+        condition: service_started
+    networks:
+      - default
+      - mcp-execution-net
+
+  # Slice 4: Capability probe — periodic MCP readiness checker (correction 005 §3).
+  # Uses API runtime image with independent command.
+  # Only needs DB + MCP URLs; does NOT need Redis/Qdrant/storage/embedding/generation keys.
+  # Joins default data network + mcp-execution-net; does NOT listen on any port.
+  capability-probe:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["python", "-m", "learn_platform_api.capability_probe"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-hello_agents}:${POSTGRES_PASSWORD:-hello_agents}@postgres:5432/${POSTGRES_DB:-hello_agents}
+      MCP_EXECUTION_ADAPTER_URL: ${MCP_EXECUTION_ADAPTER_URL:-http://mcp-execution:8100}
+      WOLFRAM_MCP_ENABLED: ${WOLFRAM_MCP_ENABLED:-false}
+      WOLFRAM_MCP_URL: ${WOLFRAM_MCP_URL:-https://agenttools.wolfram.com/mcp}
+      WOLFRAM_MCP_API_KEY: ${WOLFRAM_MCP_API_KEY:-}
+      CAPABILITY_PROBE_INTERVAL_SECONDS: ${CAPABILITY_PROBE_INTERVAL_SECONDS:-20}
+      CAPABILITY_PROBE_TTL_SECONDS: ${CAPABILITY_PROBE_TTL_SECONDS:-30}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp-execution:
+        condition: service_started
+    networks:
+      - default
+      - mcp-execution-net
 
   reconciler:
     restart: unless-stopped
@@ -233,3 +344,8 @@ volumes:
   postgres_data:
   qdrant_data:
   redis_data:
+
+networks:
+  mcp-execution-net:
+    driver: bridge
+    internal: false  # needs outbound access to execution backend

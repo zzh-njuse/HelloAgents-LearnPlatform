@@ -5,7 +5,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from academic_companion.teaching_skills import SkillUnavailable, current_published, display_name_for, load_skill
-from learn_platform_api.db.models import AgentRun, AgentToolCall, Course, CourseSection, CourseVersion, Lesson, LessonVersion, SourceDocument, DocumentChunk, TutorSession, TutorTurn, TutorTurnCitation, Workspace
+from learn_platform_api.db.models import AgentRun, AgentToolCall, CodeLabRun, Course, CourseSection, CourseVersion, Lesson, LessonVersion, SourceDocument, DocumentChunk, TutorSession, TutorTurn, TutorTurnCitation, TutorTurnCodeRun, TutorTurnToolAuthorization, Workspace
 from learn_platform_api.services.queue import enqueue_tutor_session_deletion, enqueue_tutor_turn
 from learn_platform_api.settings import Settings
 
@@ -101,10 +101,40 @@ def create_turn(db: Session, settings: Settings, workspace_id: str, session_id: 
         # Full server-resolved skill authority: id + version + hash must all match
         # (corr 3.8), so a replay under a different resolved snapshot conflicts
         # rather than returning a half-matching turn.
+        # Slice 4: science_tool_authorized is part of idempotency authority.
+        existing_auth = db.scalar(
+            select(TutorTurnToolAuthorization).where(
+                TutorTurnToolAuthorization.turn_id == existing.id,
+                TutorTurnToolAuthorization.capability_id == "science_computation",
+            )
+        )
+        existing_science = existing_auth is not None
+        # Slice 4: code tool authorization is part of idempotency authority.
+        existing_code_auth = db.scalar(
+            select(TutorTurnToolAuthorization).where(
+                TutorTurnToolAuthorization.turn_id == existing.id,
+                TutorTurnToolAuthorization.capability_id == "code_execution",
+            )
+        )
+        existing_code = existing_code_auth is not None
+        # Slice 4: code_run_id is part of idempotency authority (correction 003 §3).
+        # Same idempotency key with a different code_run_id must 409, not return old Turn.
+        existing_code_run_assoc = db.scalar(
+            select(TutorTurnCodeRun).where(
+                TutorTurnCodeRun.turn_id == existing.id,
+            )
+        )
+        existing_code_run_id = existing_code_run_assoc.code_lab_run_id if existing_code_run_assoc else None
         if (existing.question, existing.scope, existing.section_id, existing.lesson_id, existing.lesson_version_id,
                 existing.teaching_skill_id, existing.teaching_skill_version, existing.teaching_skill_hash) != (
                 payload.question.strip(), payload.scope, payload.section_id, payload.lesson_id, payload.lesson_version_id,
                 snapshot["id"], snapshot["version"], snapshot["hash"]):
+            raise ValueError("idempotency_key_conflict")
+        if existing_science != getattr(payload, 'science_tool_authorized', False):
+            raise ValueError("idempotency_key_conflict")
+        if existing_code != getattr(payload, 'code_tool_authorized', False):
+            raise ValueError("idempotency_key_conflict")
+        if existing_code_run_id != getattr(payload, 'code_run_id', None):
             raise ValueError("idempotency_key_conflict")
         return existing
     active = db.scalar(select(TutorTurn.id).where(TutorTurn.session_id == session.id, TutorTurn.status.in_(ACTIVE_TURN_STATUSES)))
@@ -118,7 +148,101 @@ def create_turn(db: Session, settings: Settings, workspace_id: str, session_id: 
             raise ValueError("lesson_version_mismatch")
     session.last_turn_ordinal += 1
     turn = TutorTurn(session_id=session.id, workspace_id=workspace_id, ordinal=session.last_turn_ordinal, attempt_number=1, idempotency_key=idempotency_key, status="queued", question=payload.question.strip(), scope=payload.scope, section_id=payload.section_id, lesson_id=payload.lesson_id, lesson_version_id=payload.lesson_version_id, history_through_ordinal=session.last_turn_ordinal - 1, teaching_skill_id=snapshot["id"], teaching_skill_version=snapshot["version"], teaching_skill_hash=snapshot["hash"])
-    db.add(turn); db.commit(); db.refresh(turn)
+    db.add(turn); db.flush()
+
+    # Slice 4: Create science tool authorization snapshot if requested (Spec 004 §6.1, ADR 006 §2.7).
+    # If capability is unavailable, request true returns stable science_tool_unavailable,
+    # not silently changed to false.
+    science_auth = getattr(payload, 'science_tool_authorized', False)
+    if science_auth:
+        if not settings.wolfram_mcp_enabled:
+            raise ValueError("science_tool_unavailable")
+        # Per correction 004 §5: the authorization snapshot must copy the
+        # admin-verified canonical snapshot from the capability status projection,
+        # NOT compute it from a dynamic handshake. The Turn authorization records
+        # what the admin has already verified — if the projection doesn't exist
+        # or hasn't been verified, the capability is not ready and authorization
+        # must be refused.
+        from learn_platform_api.services.readiness import _read_capability_projection
+        projection = _read_capability_projection(db, "science_computation")
+        if projection is None or not projection.get("ok"):
+            raise ValueError("science_tool_unavailable")
+        verified_hash = projection.get("verified_schema_hash", "")
+        if not verified_hash:
+            # No verified schema hash means the capability has never been
+            # successfully probed — cannot authorize
+            raise ValueError("science_tool_unavailable")
+        import json
+        auth = TutorTurnToolAuthorization(
+            id=str(uuid4()),
+            turn_id=turn.id,
+            workspace_id=workspace_id,
+            capability_id="science_computation",
+            max_calls=settings.wolfram_max_calls_per_turn,
+            used_calls=0,
+            mcp_server_name="wolfram-cloud-mcp",
+            mcp_protocol_version="2025-11-25",
+            mcp_tool_allowlist=json.dumps(["WolframAlpha", "WolframContext"]),
+            # Per correction 004 §5: copy the admin-verified canonical snapshot
+            # from the capability projection. This is the complete准入 snapshot
+            # that the admin has already verified — NOT a dynamic handshake hash.
+            mcp_schema_hash=verified_hash,
+        )
+        db.add(auth)
+
+    # Slice 4 packet 002: Create code tool authorization if requested (Spec 004 §8.1).
+    # Independent from science authorization; both can be active on the same Turn.
+    code_auth = getattr(payload, 'code_tool_authorized', False)
+    if code_auth:
+        if not settings.mcp_execution_adapter_url:
+            raise ValueError("code_tool_unavailable")
+        # Per Spec 004 §8.1: code execution capability must be ready
+        from learn_platform_api.services.readiness import _read_capability_projection
+        code_projection = _read_capability_projection(db, "code_execution")
+        if code_projection is None or not code_projection.get("ok"):
+            raise ValueError("code_tool_unavailable")
+        code_verified_hash = code_projection.get("verified_schema_hash", "")
+        if not code_verified_hash:
+            raise ValueError("code_tool_unavailable")
+        import json as _json
+        code_auth_record = TutorTurnToolAuthorization(
+            id=str(uuid4()),
+            turn_id=turn.id,
+            workspace_id=workspace_id,
+            capability_id="code_execution",
+            max_calls=settings.tutor_max_code_calls_per_turn,
+            used_calls=0,
+            mcp_server_name="mcp-execution-adapter",
+            mcp_protocol_version="2025-11-25",
+            mcp_tool_allowlist=_json.dumps(["run_code"]),
+            mcp_schema_hash=code_verified_hash,
+        )
+        db.add(code_auth_record)
+        turn.code_tool_authorized = True
+
+    # Slice 4: Code run safe summary association (Spec 004 §5.1, §9).
+    # At most one code run per Turn; must be terminal, same workspace, not deleted.
+    code_run_id = getattr(payload, 'code_run_id', None)
+    if code_run_id:
+        code_run = db.scalar(
+            select(CodeLabRun).where(
+                CodeLabRun.id == code_run_id,
+                CodeLabRun.workspace_id == workspace_id,
+                CodeLabRun.deleted_at.is_(None),
+            )
+        )
+        if code_run is None:
+            raise ValueError("code_run_not_found")
+        if code_run.status not in ("succeeded", "failed", "completed", "compile_error", "runtime_error", "timed_out", "output_limited", "canceled"):
+            raise ValueError("code_run_not_terminal")
+        # Create the association — safe summary only, no private I/O
+        db.add(TutorTurnCodeRun(
+            turn_id=turn.id,
+            code_lab_run_id=code_run_id,
+            workspace_id=workspace_id,
+        ))
+
+    db.commit(); db.refresh(turn)
     try:
         enqueue_tutor_turn(settings, turn.id)
     except Exception:
@@ -150,7 +274,25 @@ def turn_detail(db: Session, turn: TutorTurn) -> dict:
         .where(AgentRun.tutor_turn_id == turn.id, AgentToolCall.tool_name == "LessonCompletionContext")
         .order_by(AgentToolCall.created_at.desc()).limit(1)
     ) or 0
-    return {"id": turn.id, "session_id": turn.session_id, "ordinal": turn.ordinal, "attempt_number": turn.attempt_number, "status": turn.status, "question": turn.question, "scope": turn.scope, "section_id": turn.section_id, "lesson_id": turn.lesson_id, "lesson_version_id": turn.lesson_version_id, "answer_blocks": turn.answer_blocks, "citations": citations, "error_code": turn.error_code, "error_message": turn.error_message, "created_at": turn.created_at.isoformat(), "completed_at": turn.completed_at.isoformat() if turn.completed_at else None, "memory_count": memory_count, "completion_count": completion_count, "teaching_skill": _teaching_skill_projection(turn)}
+    # Slice 4: science tool usage summary (Spec 004 §6.1, ADR 006 §2.7)
+    science_auth = db.scalar(
+        select(TutorTurnToolAuthorization).where(
+            TutorTurnToolAuthorization.turn_id == turn.id,
+            TutorTurnToolAuthorization.capability_id == "science_computation",
+        )
+    )
+    science_tool_used = science_auth is not None and science_auth.used_calls > 0
+    science_tool_call_count = science_auth.used_calls if science_auth else 0
+    # Slice 4 packet 002: code tool usage summary (Spec 004 §8.1)
+    code_auth = db.scalar(
+        select(TutorTurnToolAuthorization).where(
+            TutorTurnToolAuthorization.turn_id == turn.id,
+            TutorTurnToolAuthorization.capability_id == "code_execution",
+        )
+    )
+    code_tool_used = code_auth is not None and code_auth.used_calls > 0
+    code_tool_call_count = code_auth.used_calls if code_auth else 0
+    return {"id": turn.id, "session_id": turn.session_id, "ordinal": turn.ordinal, "attempt_number": turn.attempt_number, "status": turn.status, "question": turn.question, "scope": turn.scope, "section_id": turn.section_id, "lesson_id": turn.lesson_id, "lesson_version_id": turn.lesson_version_id, "answer_blocks": turn.answer_blocks, "citations": citations, "error_code": turn.error_code, "error_message": turn.error_message, "created_at": turn.created_at.isoformat(), "completed_at": turn.completed_at.isoformat() if turn.completed_at else None, "memory_count": memory_count, "completion_count": completion_count, "teaching_skill": _teaching_skill_projection(turn), "science_tool_used": science_tool_used, "science_tool_call_count": science_tool_call_count, "code_tool_used": code_tool_used, "code_tool_call_count": code_tool_call_count}
 
 
 def cancel_turn(db: Session, workspace_id: str, turn_id: str) -> TutorTurn | None:
@@ -203,7 +345,60 @@ def retry_turn(db: Session, settings: Settings, workspace_id: str, turn_id: str)
     if active:
         raise ValueError("active_turn_exists")
     retry = TutorTurn(session_id=session.id, workspace_id=workspace_id, ordinal=original.ordinal, attempt_number=original.attempt_number + 1, idempotency_key=str(uuid4()), status="queued", question=original.question, scope=original.scope, section_id=original.section_id, lesson_id=original.lesson_id, lesson_version_id=original.lesson_version_id, history_through_ordinal=original.history_through_ordinal, teaching_skill_id=original.teaching_skill_id, teaching_skill_version=original.teaching_skill_version, teaching_skill_hash=original.teaching_skill_hash)
-    db.add(retry); db.commit(); db.refresh(retry)
+    db.add(retry); db.flush()
+
+    # Slice 4: Copy science tool authorization snapshot from original Turn to retry.
+    # Per §3.5: retry copies the original authorization snapshot and remaining
+    # budget (max_calls - used_calls), never expanding beyond the original max_calls.
+    # New normal Turns do NOT inherit authorization.
+    original_auth = db.scalar(
+        select(TutorTurnToolAuthorization).where(
+            TutorTurnToolAuthorization.turn_id == original.id,
+            TutorTurnToolAuthorization.capability_id == "science_computation",
+        )
+    )
+    if original_auth is not None:
+        remaining_budget = max(0, original_auth.max_calls - original_auth.used_calls)
+        retry_auth = TutorTurnToolAuthorization(
+            id=str(uuid4()),
+            turn_id=retry.id,
+            workspace_id=workspace_id,
+            capability_id=original_auth.capability_id,
+            max_calls=remaining_budget,  # remaining budget, never expanding
+            used_calls=0,
+            mcp_server_name=original_auth.mcp_server_name,
+            mcp_protocol_version=original_auth.mcp_protocol_version,
+            mcp_tool_allowlist=original_auth.mcp_tool_allowlist,
+            mcp_schema_hash=original_auth.mcp_schema_hash,
+        )
+        db.add(retry_auth)
+
+    # Slice 4 packet 002: Copy code tool authorization from original Turn to retry.
+    # Same pattern as science auth: remaining budget, never expanding.
+    original_code_auth = db.scalar(
+        select(TutorTurnToolAuthorization).where(
+            TutorTurnToolAuthorization.turn_id == original.id,
+            TutorTurnToolAuthorization.capability_id == "code_execution",
+        )
+    )
+    if original_code_auth is not None:
+        remaining_code_budget = max(0, original_code_auth.max_calls - original_code_auth.used_calls)
+        retry_code_auth = TutorTurnToolAuthorization(
+            id=str(uuid4()),
+            turn_id=retry.id,
+            workspace_id=workspace_id,
+            capability_id=original_code_auth.capability_id,
+            max_calls=remaining_code_budget,
+            used_calls=0,
+            mcp_server_name=original_code_auth.mcp_server_name,
+            mcp_protocol_version=original_code_auth.mcp_protocol_version,
+            mcp_tool_allowlist=original_code_auth.mcp_tool_allowlist,
+            mcp_schema_hash=original_code_auth.mcp_schema_hash,
+        )
+        db.add(retry_code_auth)
+        retry.code_tool_authorized = True
+
+    db.commit(); db.refresh(retry)
     try: enqueue_tutor_turn(settings, retry.id)
     except Exception:
         retry.status = "queue_failed"; retry.error_code = "queue_unavailable"; retry.error_message = "Tutor 队列暂时不可用"; db.commit()
@@ -259,6 +454,9 @@ def delete_turn(db: Session, workspace_id: str, turn_id: str) -> bool:
     db.execute(delete(AgentToolCall).where(AgentToolCall.agent_run_id.in_(run_ids)))
     db.execute(delete(AgentRun).where(AgentRun.tutor_turn_id == turn.id))
     db.execute(delete(TutorTurnCitation).where(TutorTurnCitation.turn_id == turn.id))
+    # Slice 4: Delete science tool authorization and code run associations
+    db.execute(delete(TutorTurnToolAuthorization).where(TutorTurnToolAuthorization.turn_id == turn.id))
+    db.execute(delete(TutorTurnCodeRun).where(TutorTurnCodeRun.turn_id == turn.id))
     db.delete(turn)
     db.commit()
     return True
