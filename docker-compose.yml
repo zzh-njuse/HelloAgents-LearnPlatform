@@ -89,8 +89,10 @@ services:
       # Slice 4: MCP capabilities (optional, disabled by default)
       # API only needs to know IF capabilities are configured for readiness;
       # it does NOT call them directly — workers do.
-      MCP_EXECUTION_ADAPTER_URL: ${MCP_EXECUTION_ADAPTER_URL:-}
+      MCP_EXECUTION_ADAPTER_URL: ${MCP_EXECUTION_ADAPTER_URL:-http://mcp-execution:8100}
       WOLFRAM_MCP_ENABLED: ${WOLFRAM_MCP_ENABLED:-false}
+      # Correction 002 §2: independent model for practice generation
+      PRACTICE_GENERATION_MODEL: ${PRACTICE_GENERATION_MODEL:-deepseek-v4-pro}
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000"
     volumes:
@@ -171,6 +173,8 @@ services:
       TUTOR_MAX_SCIENCE_CALLS_PER_TURN: ${TUTOR_MAX_SCIENCE_CALLS_PER_TURN:-3}
       TUTOR_MAX_DECISION_STEPS: ${TUTOR_MAX_DECISION_STEPS:-8}
       LESSON_GENERATION_MAX_SCIENCE_CALLS: ${LESSON_GENERATION_MAX_SCIENCE_CALLS:-3}
+      # Correction 002 §2: independent model for practice generation
+      PRACTICE_GENERATION_MODEL: ${PRACTICE_GENERATION_MODEL:-deepseek-v4-pro}
     volumes:
       - ./storage:/app/storage
     depends_on:
@@ -233,6 +237,8 @@ services:
       PRACTICE_GENERATION_MAX_TOOL_CALLS: ${PRACTICE_GENERATION_MAX_TOOL_CALLS:-10}
       PRACTICE_CODING_MAX_REF_CALLS: ${PRACTICE_CODING_MAX_REF_CALLS:-1}
       PRACTICE_GRADING_MAX_SCIENCE_CALLS: ${PRACTICE_GRADING_MAX_SCIENCE_CALLS:-2}
+      # Correction 002 §2: independent model for practice generation
+      PRACTICE_GENERATION_MODEL: ${PRACTICE_GENERATION_MODEL:-deepseek-v4-pro}
     volumes:
       - ./storage:/app/storage
     depends_on:

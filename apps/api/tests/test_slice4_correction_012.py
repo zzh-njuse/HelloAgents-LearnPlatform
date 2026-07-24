@@ -290,8 +290,21 @@ class TestReferenceValidationOrder:
         import inspect
         source = inspect.getsource(practice_generation.execute_generation)
 
-        # After failed_items is non-empty, must raise ValueError
-        assert 'raise ValueError("coding_reference_validation_failed")' in source
+        # After a failed specialized repair, must raise ValueError. Slice 5
+        # (Spec 005 §8) refined the terminal code to the stable per-category
+        # codes (coding_reference_compile_failed / coding_reference_test_failed /
+        # coding_starter_invalid). Correction 002 §D further refined to use
+        # distinct stable codes for repair-artifact-invalid vs
+        # repair-then-revalidate failure, raised via repair_invalid_code and
+        # reval_code instead of the original user_code.
+        # Assert the refined contract holds in source.
+        assert 'raise ValueError(repair_invalid_code)' in source
+        assert 'raise ValueError(reval_code)' in source
+        module_source = inspect.getsource(practice_generation)
+        assert 'coding_reference_compile_failed' in module_source
+        assert 'coding_reference_test_failed' in module_source
+        assert 'coding_repair_artifact_invalid' in module_source
+        assert 'coding_repair_revalidation_failed' in module_source
 
 
 # ---------------------------------------------------------------------------

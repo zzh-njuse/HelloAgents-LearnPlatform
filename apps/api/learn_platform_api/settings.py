@@ -44,10 +44,14 @@ class Settings(BaseSettings):
     tutor_skill_max_evidence_tokens: int = Field(default=10_000, gt=0)
     tutor_skill_max_output_tokens: int = Field(default=3_000, gt=0)
     practice_queue_name: str = "learn-platform-practice"
-    practice_generation_max_steps: int = Field(default=6, ge=1)
+    # Slice 5 (Spec 005 §7.2 / ADR 007 §3.6): a single authoritative budget.
+    # provider calls total 4 (plan + initial + structure repair + specialized
+    # repair); attempt steps 12; searches 3. The old dual denomination
+    # (separate eval 6-step vs runtime 20-step) and the dead per-item ref-call
+    # setting were removed.
     practice_generation_max_searches: int = Field(default=3, ge=1)
-    practice_generation_max_provider_calls: int = Field(default=6, ge=1)
-    practice_generation_max_attempt_steps: int = Field(default=20, ge=1)
+    practice_generation_max_provider_calls: int = Field(default=4, ge=1)
+    practice_generation_max_attempt_steps: int = Field(default=12, ge=1)
     practice_generation_max_evidence_tokens: int = Field(default=24_000, gt=0)
     practice_generation_max_output_tokens: int = Field(default=12_000, gt=0)
     practice_generation_search_top_k: int = Field(default=5, gt=0, le=5)
@@ -84,6 +88,11 @@ class Settings(BaseSettings):
     product_generation_thinking: bool = False
     product_generation_max_evidence_tokens: int = Field(default=12_000, gt=0)
     product_generation_max_output_tokens: int = Field(default=1_500, gt=0)
+    # Correction 002 §2 / Spec 005 §7.2: independent model for practice
+    # generation and generation-period repair. Default deepseek-v4-pro for
+    # improved Java/C++ success rate. Tutor, course generation, RAG answer
+    # and practice grading continue using product_generation_model.
+    practice_generation_model: str = "deepseek-v4-pro"
     lesson_generation_max_evidence_tokens: int = Field(default=48_000, gt=0)
     lesson_generation_max_output_tokens_per_call: int = Field(default=8_000, gt=0)
     lesson_generation_max_total_output_tokens: int = Field(default=32_000, gt=0)
@@ -116,9 +125,10 @@ class Settings(BaseSettings):
     tutor_max_code_calls_per_turn: int = Field(default=2, ge=0)  # code subset
     tutor_max_science_calls_per_turn: int = Field(default=3, ge=0)  # science subset
     tutor_max_decision_steps: int = Field(default=8, ge=5)  # raised from 5 to 8
-    # Practice coding/science budgets
+    # Practice coding/science budgets. practice_generation_max_tool_calls is the
+    # single per-capability JobToolAuthorization budget (ADR 007 §3.6); the dead
+    # practice_coding_max_ref_calls denomination was removed in Slice 5.
     practice_generation_max_tool_calls: int = Field(default=10, ge=0)  # reference + starter validation / science per Set
-    practice_coding_max_ref_calls: int = Field(default=1, ge=0)  # per coding item
     practice_grading_max_science_calls: int = Field(default=2, ge=0)  # per scientific item
     # Lesson Writer science budget
     lesson_generation_max_science_calls: int = Field(default=3, ge=0)  # per Lesson Job

@@ -32,6 +32,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -356,8 +357,37 @@ def write_projection(db: Session, capability_id: str, probe_result: dict) -> Non
 # Main probe loop
 # ---------------------------------------------------------------------------
 
+def _run_capability_loop(engine, capability_id: str, probe) -> None:
+    """Refresh one capability independently of every other remote probe."""
+    while not _shutdown:
+        try:
+            with Session(engine) as db:
+                result = probe()
+                write_projection(db, capability_id, result)
+                db.commit()
+                logger.info(
+                    "%s probe: status=%s detail=%s hash=%s",
+                    capability_id,
+                    result["status"],
+                    result["detail"],
+                    result.get("verified_schema_hash", "")[:8],
+                )
+        except Exception as exc:
+            logger.error("%s probe cycle failed: %s", capability_id, exc, exc_info=True)
+
+        # Schedule from completion rather than cycle start. A slow or failing
+        # remote probe must not fall into a zero-delay retry loop.
+        if not _shutdown:
+            time.sleep(PROBE_INTERVAL_SECONDS)
+
+
 def run_probe_loop() -> None:
-    """Run the capability probe loop until shutdown."""
+    """Run isolated execution and science refresh loops until shutdown.
+
+    A slow remote science handshake must never let the local execution
+    projection expire. Each capability owns its scheduling loop and database
+    session; the main thread only supervises graceful shutdown.
+    """
     if not DATABASE_URL:
         logger.error("DATABASE_URL not configured — cannot start probe")
         sys.exit(1)
@@ -370,49 +400,34 @@ def run_probe_loop() -> None:
         WOLFRAM_MCP_ENABLED,
     )
 
-    while not _shutdown:
-        cycle_start = time.monotonic()
-        try:
-            with Session(engine) as db:
-                # Probe execution MCP
-                execution_result = probe_execution(MCP_EXECUTION_ADAPTER_URL)
-                write_projection(db, "code_execution", execution_result)
-                db.commit()
-                logger.info(
-                    "Execution probe: status=%s detail=%s hash=%s",
-                    execution_result["status"],
-                    execution_result["detail"],
-                    execution_result.get("verified_schema_hash", "")[:8],
-                )
+    def science_probe() -> dict:
+        if WOLFRAM_MCP_ENABLED:
+            return probe_science(WOLFRAM_MCP_URL, WOLFRAM_MCP_API_KEY)
+        return {
+            "status": "unavailable",
+            "detail": "未启用",
+            "verified_schema_hash": "",
+        }
 
-                # Probe science (Wolfram) MCP
-                if WOLFRAM_MCP_ENABLED:
-                    science_result = probe_science(WOLFRAM_MCP_URL, WOLFRAM_MCP_API_KEY)
-                    write_projection(db, "science_computation", science_result)
-                    db.commit()
-                    logger.info(
-                        "Science probe: status=%s detail=%s hash=%s",
-                        science_result["status"],
-                        science_result["detail"],
-                        science_result.get("verified_schema_hash", "")[:8],
-                    )
-                else:
-                    # Write disabled projection
-                    write_projection(db, "science_computation", {
-                        "status": "unavailable",
-                        "detail": "未启用",
-                        "verified_schema_hash": "",
-                    })
-                    db.commit()
+    threads = [
+        threading.Thread(
+            target=_run_capability_loop,
+            args=(engine, "code_execution", lambda: probe_execution(MCP_EXECUTION_ADAPTER_URL)),
+            name="code-execution-probe",
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_run_capability_loop,
+            args=(engine, "science_computation", science_probe),
+            name="science-computation-probe",
+            daemon=True,
+        ),
+    ]
+    for thread in threads:
+        thread.start()
 
-        except Exception as exc:
-            logger.error("Probe cycle failed: %s", exc, exc_info=True)
-
-        # Sleep for remaining interval
-        elapsed = time.monotonic() - cycle_start
-        sleep_time = max(0, PROBE_INTERVAL_SECONDS - elapsed)
-        if sleep_time > 0 and not _shutdown:
-            time.sleep(sleep_time)
+    while not _shutdown and all(thread.is_alive() for thread in threads):
+        time.sleep(0.5)
 
     logger.info("Capability probe shut down.")
 

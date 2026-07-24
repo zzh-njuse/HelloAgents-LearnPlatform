@@ -1,4 +1,4 @@
-import { BotMessageSquare, LoaderCircle, Maximize2, Minimize2, RefreshCw, Send, Square, Trash2 } from "lucide-react";
+import { BotMessageSquare, LoaderCircle, RefreshCw, Send, Square, Trash2 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { cancelTutorTurn, CourseReader, createTutorSession, createTutorTurn, deleteTutorSession, deleteTutorTurn, fetchLearningMemories, fetchLessonCompletions, fetchMemoryPolicy, fetchTutorSession, fetchTutorSessions, fetchTutorSkill, retryTutorTurn, TutorSession, TutorTeachingSkill, tutorTurnEventsUrl } from "../lib/api";
@@ -29,27 +29,47 @@ export function TutorPanel({ workspaceId, reader, lessonId, onLessonId, onManage
   // Slice 4 packet 002: code tool authorization per Turn (Spec 004 §8.1)
   const [codeToolAuthorized, setCodeToolAuthorized] = useState(false);
   const [codeToolAvailable, setCodeToolAvailable] = useState(false);
-  // Slice 4 / Correction 011 §2: focus mode for Tutor (Spec 004 §11.3)
-  const [focused, setFocused] = useState(false);
+  // Task B: Tutor focus mode removed — the zoom/expand button had no clear
+  // value for Tutor (it is not a coding-specific capability) and interacted
+  // poorly with practice focus mode. No replacement Tutor full-screen in this round.
   const turnIdempotencyKey = useRef<string | null>(null);
+
+  const refreshCapabilities = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch(`${import.meta.env.VITE_API_BASE_URL ?? ""}/api/v1/workspaces/${workspaceId}/mcp-capabilities`, { signal });
+    if (!response.ok) throw new Error("capability_status_unavailable");
+    const capabilities = await response.json() as Array<{ capability: string; status: string }>;
+    const scienceReady = capabilities.find((item) => item.capability === "science_computation")?.status === "ready";
+    const codeReady = capabilities.find((item) => item.capability === "code_execution")?.status === "ready";
+    setScienceToolAvailable(scienceReady);
+    setCodeToolAvailable(codeReady);
+    return { scienceReady, codeReady };
+  }, [workspaceId]);
 
   useEffect(() => {
     const controller = new AbortController();
     void fetchTutorSkill(workspaceId, controller.signal).then((capability) => setSkill(capability.teaching_skill)).catch(() => {
       if (!controller.signal.aborted) setSkill(null);
     });
-    // Slice 4: Check science tool availability
-    void fetch(`${import.meta.env.VITE_API_BASE_URL ?? ""}/api/v1/workspaces/${workspaceId}/mcp-capabilities`)
-      .then((res) => res.json())
-      .then((caps: Array<{capability: string; status: string}>) => {
-        const science = caps.find((c) => c.capability === "science_computation");
-        setScienceToolAvailable(science?.status === "ready");
-        const code = caps.find((c) => c.capability === "code_execution");
-        setCodeToolAvailable(code?.status === "ready");
-      })
-      .catch(() => { setScienceToolAvailable(false); setCodeToolAvailable(false); });
-    return () => controller.abort();
-  }, [workspaceId]);
+    const refresh = () => {
+      void refreshCapabilities(controller.signal).catch(() => {
+        if (!controller.signal.aborted) {
+          setScienceToolAvailable(false);
+          setCodeToolAvailable(false);
+        }
+      });
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 30_000);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [refreshCapabilities, workspaceId]);
 
   const refreshSessions = useCallback(async () => {
     const items = await fetchTutorSessions(workspaceId, reader.course.id, reader.version.id);
@@ -72,6 +92,12 @@ export function TutorPanel({ workspaceId, reader, lessonId, onLessonId, onManage
     : turn.scope === "lesson" && turn.lesson_version_id === selectedLesson?.version.id) ?? [];
   const latestVisibleTurn = visibleTurns[visibleTurns.length - 1];
   useEffect(() => {
+    setScienceToolAuthorized(false);
+    setCodeToolAuthorized(false);
+    turnIdempotencyKey.current = null;
+  }, [lessonId, scope, workspaceId]);
+
+  useEffect(() => {
     void Promise.all([fetchLearningMemories(workspaceId), fetchLessonCompletions(workspaceId, reader.course.id), fetchMemoryPolicy(workspaceId)])
       .then(([memories, completions, policy]) => {
         setMemoryEnabled(policy.tutor_use_enabled);
@@ -91,6 +117,11 @@ export function TutorPanel({ workspaceId, reader, lessonId, onLessonId, onManage
   const submit = async (event: FormEvent) => {
     event.preventDefault(); if (!question.trim()) return; setBusy(true); setError(null);
     try {
+      if (scienceToolAuthorized || codeToolAuthorized) {
+        const availability = await refreshCapabilities();
+        if (scienceToolAuthorized && !availability.scienceReady) throw new Error("science_tool_unavailable");
+        if (codeToolAuthorized && !availability.codeReady) throw new Error("code_tool_unavailable");
+      }
       if (scope === "lesson" && !selectedLesson) throw new Error("请选择当前课程中的有效课节");
       let current = session;
       if (!current) {
@@ -140,16 +171,10 @@ export function TutorPanel({ workspaceId, reader, lessonId, onLessonId, onManage
     finally { setBusy(false); }
   };
 
-  // Focus mode: Escape key handler
-  useEffect(() => {
-    if (!focused) return;
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setFocused(false); };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [focused]);
+  // Task B: Tutor focus mode removed — no focused state, no Escape handler, no zoom button.
 
-  return <aside className={`tutor-panel${focused ? " tutor-focused" : ""}`} aria-label="课程 Tutor">
-    <header><div><span className="eyebrow">受控 Tutor</span><h3><BotMessageSquare size={18} />课程问答</h3></div><div className="header-actions">{focused ? <button className="icon-button" onClick={() => setFocused(false)} title="退出专注模式" type="button"><Minimize2 /></button> : <button className="icon-button" onClick={() => setFocused(true)} title="专注模式" type="button"><Maximize2 /></button>}{session ? <button className="icon-button" disabled={busy} onClick={() => void removeSession()} title="删除当前 Tutor Session" type="button"><Trash2 /></button> : null}</div></header>
+  return <aside className="tutor-panel" aria-label="课程 Tutor">
+    <header><div><span className="eyebrow">受控 Tutor</span><h3><BotMessageSquare size={18} />课程问答</h3></div><div className="header-actions">{session ? <button className="icon-button" disabled={busy} onClick={() => void removeSession()} title="删除当前 Tutor Session" type="button"><Trash2 /></button> : null}</div></header>
     <div className="tutor-meta"><span>课程版本 {reader.version.version_number}</span><span>{session ? `${session.provider} / ${session.model}` : "尚未创建 Session"}</span>{latestVisibleTurn?.status === "succeeded" ? <span className="tool-usage">代码 {latestVisibleTurn.code_tool_call_count} 次 / 科学 {latestVisibleTurn.science_tool_call_count} 次</span> : null}</div>
     <div className="tutor-skill-meta">教学方法：{skill ? `${skill.display_name} v${skill.version}` : "—"}</div>
     <div className="tutor-memory-status">{memoryEnabled ? <>当前范围可选 {memoryCount} 条薄弱点记忆、{completionCount} 条课节完成记录{latestVisibleTurn?.status === "succeeded" ? `；最近一次实际使用 ${latestVisibleTurn.memory_count} 条、${latestVisibleTurn.completion_count} 条` : ""}</> : "学习记忆与课节完成记录未用于 Tutor"}{onManageMemory ? <button className="text-button" onClick={onManageMemory} type="button">管理</button> : null}</div>

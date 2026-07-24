@@ -546,6 +546,11 @@ class PracticeJob(Base):
     # Slice 4 packet 002: item type mode and code language request
     item_type_mode: Mapped[str] = mapped_column(String(20), default="auto", nullable=False)
     code_languages: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # Slice 5 (ADR 007 §3.9): artifact contract version pinned at creation.
+    # Failed/retry Jobs keep their snapshot instead of reading a deployment
+    # default that could silently change the contract after an upgrade.
+    # Existing rows backfill to practice_artifact_v1 via migration 0023.
+    artifact_contract_version: Mapped[str] = mapped_column(String(40), default="practice_artifact_v1", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -5,8 +5,9 @@ from sqlalchemy.orm import Session
 
 from learn_platform_api.db.models import (
     AgentRun, Course, CourseGenerationJob, CourseSection, CourseVersion, CourseVersionSource,
-    DocumentChunk, DocumentVersion, Lesson, LessonVersion, PracticeAttempt, PracticeFeedback,
-    PracticeItem, PracticeItemCitation, PracticeJob, PracticeJobSource, PracticeSet, SourceDocument, Workspace,
+    DocumentChunk, DocumentVersion, LearningTarget, Lesson, LessonVersion, PracticeAttempt, PracticeFeedback,
+    PracticeItem, PracticeItemCitation, PracticeItemTarget, PracticeJob, PracticeJobSource, PracticeSet,
+    SourceDocument, Workspace,
 )
 from learn_platform_api.schemas.documents import CitationRead, RetrievalResult
 from learn_platform_api.services import practice_generation
@@ -277,7 +278,26 @@ def test_course_deletion_cleans_practice(client: TestClient, db_session: Session
 def test_source_degraded_blocks_new_generation_and_keeps_history(client: TestClient, db_session: Session, monkeypatch) -> None:
     from learn_platform_api.services import practice
     workspace, course, version, _section, lesson, lesson_version, chunk, document, docver = _reader_fixture(db_session)
-    practice_set, _single, _short = _seed_set(db_session, workspace, course, version, lesson, lesson_version, chunk, document, docver)
+    practice_set, single, _short = _seed_set(db_session, workspace, course, version, lesson, lesson_version, chunk, document, docver)
+    target = LearningTarget(
+        workspace_id=workspace.id,
+        course_id=course.id,
+        course_version_id=version.id,
+        lesson_id=lesson.id,
+        lesson_version_id=lesson_version.id,
+        target_key="objective_1",
+        title="Objective",
+        kind="objective",
+    )
+    db_session.add(target)
+    db_session.flush()
+    db_session.add(PracticeItemTarget(
+        practice_item_id=single.id,
+        learning_target_id=target.id,
+        workspace_id=workspace.id,
+        criterion_key=None,
+    ))
+    db_session.commit()
     document.lifecycle_status = "deleted"; db_session.commit()
     detail = client.get(f"/api/v1/workspaces/{workspace.id}/practice-sets/{practice_set.id}").json()
     assert detail["source_degraded"] is True
@@ -370,5 +390,5 @@ def test_deleting_set_reconciler_re_enqueues_and_cleans_up(db_session: Session, 
     # Now actually clean up (as the worker would).
     from learn_platform_api.services.practice import cleanup_set
     cleanup_set(db_session, practice_set.id)
-    for model in [PracticeSet, PracticeItem, PracticeItemCitation, PracticeAttempt, PracticeFeedback, PracticeJob, PracticeJobSource]:
+    for model in [PracticeSet, PracticeItem, PracticeItemCitation, PracticeItemTarget, PracticeAttempt, PracticeFeedback, PracticeJob, PracticeJobSource]:
         assert db_session.query(model).filter_by(workspace_id=workspace.id).count() == 0, f"{model.__name__} residue"

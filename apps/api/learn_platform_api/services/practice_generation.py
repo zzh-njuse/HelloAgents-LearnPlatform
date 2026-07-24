@@ -24,20 +24,32 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from academic_companion.practice_agents import (
+    ARTIFACT_CONTRACT_V1,
+    ARTIFACT_CONTRACT_V2,
+    HARNESS_V1,
+    HARNESS_V2,
+    CodingTestCase,
     PracticeAuthorRequest,
     PracticeFeedbackArtifact,
     PracticeGraderRequest,
+    PracticeItemArtifact,
     PracticeRubricCriterion,
     PracticeSetArtifact,
+    ScientificAnswerSpec,
     build_grading_prompt,
     build_grading_repair_prompt,
+    build_novelty_item_repair_prompt,
     build_practice_generation_prompt,
     build_practice_repair_prompt,
     build_practice_search_prompt,
+    build_specialized_item_repair_prompt,
     feedback_citation_ids,
+    harness_for_artifact,
     item_citation_ids,
     validate_feedback_citations,
     validate_practice_citations,
+    CodingReferenceRepairArtifact,
+    ScientificReferenceRepairArtifact,
 )
 from learn_platform_api.db.models import (
     AgentRun,
@@ -74,6 +86,15 @@ from learn_platform_api.services.code_lab_execution import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Slice 5 novelty policy (Spec 005 §9 / ADR 007 §3.8): exact normalized repeat
+# is a hard reject; a bounded, versioned character 3-gram Jaccard score gates
+# near-duplicates only within the same target/type/task signature. The soft
+# band is a one-shot repair hint, never a hard reject.
+NOVELTY_POLICY_VERSION = "char3gram_jaccard_v1"
+NOVELTY_HARD_THRESHOLD = 0.90
+NOVELTY_SOFT_THRESHOLD = 0.75
 
 
 def now() -> datetime:
@@ -178,6 +199,31 @@ def call_provider(settings: Settings, messages: list[dict[str, str]], max_output
         raise ValueError("provider_unavailable") from exc
 
 
+def call_practice_provider(settings: Settings, messages: list[dict[str, str]], max_output_tokens: int | None = None, timeout_seconds: float | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Practice generation provider call using practice_generation_model.
+
+    Per Correction 002 §2: practice generation and generation-period repair
+    use ``practice_generation_model`` (default deepseek-v4-pro) instead of
+    ``product_generation_model``. Tutor, course generation, RAG answer and
+    practice grading continue using ``product_generation_model``.
+    """
+    if not settings.product_generation_api_key:
+        raise ValueError("provider_unconfigured")
+    try:
+        response = httpx.post(
+            f"{settings.product_generation_base_url.rstrip('/')}/chat/completions",
+            headers={"Authorization": f"Bearer {settings.product_generation_api_key}"},
+            json={"model": settings.practice_generation_model, "messages": messages, "response_format": {"type": "json_object"}, "max_tokens": max_output_tokens or settings.product_generation_max_output_tokens, "temperature": 0.2},
+            timeout=timeout_seconds or settings.practice_generation_timeout_seconds,
+        )
+        response.raise_for_status()
+        body = response.json()
+        content = body["choices"][0]["message"]["content"]
+        return json.loads(content), {"input_tokens": body.get("usage", {}).get("prompt_tokens"), "output_tokens": body.get("usage", {}).get("completion_tokens"), "finish_reason": body["choices"][0].get("finish_reason")}
+    except (httpx.HTTPError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("provider_unavailable") from exc
+
+
 def _check_active(db: Session, job: PracticeJob, expected_worker_id: str, *, started: float, wall_limit: int, lease_lost=None, check_wall: bool = True) -> None:
     """Per-call authority + ownership + lease gate.
 
@@ -225,13 +271,21 @@ def _course_version_degraded(db: Session, course_version_id: str) -> bool:
     return False
 
 
-def _assert_generation_authority(db: Session, job: PracticeJob, expected_worker_id: str, lease_lost) -> None:
+def _assert_generation_authority(
+    db: Session,
+    job: PracticeJob,
+    expected_worker_id: str,
+    lease_lost,
+    *,
+    started: float,
+    wall_limit: int,
+) -> None:
     """Re-validate every authoritative precondition in the final transaction.
 
     A late worker whose workspace/course/lesson/source/owner/lease state changed
     after the provider returned must drop its result rather than commit.
     """
-    _check_active(db, job, expected_worker_id, started=0.0, wall_limit=0, lease_lost=lease_lost, check_wall=False)
+    _check_active(db, job, expected_worker_id, started=started, wall_limit=wall_limit, lease_lost=lease_lost)
     lesson = db.get(Lesson, job.lesson_id)
     lesson_version = db.get(LessonVersion, job.lesson_version_id)
     if (
@@ -248,8 +302,18 @@ def _assert_generation_authority(db: Session, job: PracticeJob, expected_worker_
     _sources(db, job)
 
 
-def _assert_grading_authority(db: Session, job: PracticeJob, attempt: PracticeAttempt, item: PracticeItem, expected_worker_id: str, lease_lost) -> None:
-    _check_active(db, job, expected_worker_id, started=0.0, wall_limit=0, lease_lost=lease_lost, check_wall=False)
+def _assert_grading_authority(
+    db: Session,
+    job: PracticeJob,
+    attempt: PracticeAttempt,
+    item: PracticeItem,
+    expected_worker_id: str,
+    lease_lost,
+    *,
+    started: float,
+    wall_limit: int,
+) -> None:
+    _check_active(db, job, expected_worker_id, started=started, wall_limit=wall_limit, lease_lost=lease_lost)
     db.refresh(attempt)
     if attempt.workspace_id != job.workspace_id or attempt.practice_job_id != job.id or attempt.practice_item_id != item.id:
         raise ValueError("practice_canceled")
@@ -269,6 +333,13 @@ def execute_generation(db: Session, settings: Settings, job: PracticeJob, *, wor
     lesson_version = db.get(LessonVersion, job.lesson_version_id)
     if lesson is None or lesson_version is None or lesson.workspace_id != job.workspace_id or lesson_version.lesson_id != lesson.id or lesson_version.status != "published" or lesson.current_published_version_id != lesson_version.id:
         raise ValueError("practice_canceled")
+
+    # Slice 5 (ADR 007 §3.1/§6, Codex review High 2): generation dispatches by
+    # The additional human Gate makes generation v2-only. Historical v1 Set/Item remain
+    # readable and gradable, but unfinished v1 generation Jobs are not resumed.
+    artifact_contract_version = job.artifact_contract_version
+    if artifact_contract_version != ARTIFACT_CONTRACT_V2:
+        raise ValueError("artifact_contract_unsupported")
 
     # Slice 4 packet 002 / Correction 011 §1.2: Validate item_type_mode
     # against lesson suitability. The profile is built from the structured
@@ -302,8 +373,11 @@ def execute_generation(db: Session, settings: Settings, job: PracticeJob, *, wor
     else:
         allowed_types = tuple(value for value in ("single_choice", "short_answer", "coding", "scientific") if value in supported)
 
-    prior_stem_rows = list(db.scalars(
-        select(PracticeItem.stem)
+    # Slice 5 (Spec 005 §9): read recent prior items for dedup. Only the stem is
+    # safe to summarize for the provider prompt; target/type come from the same
+    # row to scope near-duplicate detection. No answers/rubric/reference/tests.
+    prior_rows = list(db.execute(
+        select(PracticeItem.stem, PracticeItem.item_type, PracticeItem.answer_spec)
         .join(PracticeSet, PracticeItem.practice_set_id == PracticeSet.id)
         .where(
             PracticeSet.workspace_id == job.workspace_id,
@@ -312,15 +386,20 @@ def execute_generation(db: Session, settings: Settings, job: PracticeJob, *, wor
         )
         .order_by(PracticeSet.created_at.desc(), PracticeItem.ordinal.asc())
         .limit(50)
-    ))
+    ).all())
     prior_stems: list[str] = []
+    prior_items: list[tuple[str, str, str]] = []  # (target_key, item_type, stem) for novelty
     prior_chars = 0
-    for stem in prior_stem_rows:
+    for stem, item_type, answer_spec in prior_rows:
         bounded = str(stem).strip()[:1000]
         if not bounded or prior_chars + len(bounded) > 6000:
             break
         prior_stems.append(bounded)
         prior_chars += len(bounded)
+        target_key = ""
+        if isinstance(answer_spec, dict):
+            target_key = str(answer_spec.get("_learning_target_key") or answer_spec.get("target_key") or "")
+        prior_items.append((target_key, str(item_type or ""), bounded))
 
     request = PracticeAuthorRequest(
         lesson_title=lesson.title,
@@ -361,7 +440,7 @@ def execute_generation(db: Session, settings: Settings, job: PracticeJob, *, wor
         provider_calls += 1
         ordinal += 1
         run.step_count = ordinal  # count the attempt before it runs
-        generated, usage = call_provider(settings, messages, max_tokens, settings.practice_generation_timeout_seconds)
+        generated, usage = call_practice_provider(settings, messages, max_tokens, settings.practice_generation_timeout_seconds)
         reported_in = usage.get("input_tokens")
         reported_out = usage.get("output_tokens")
         if reported_in is None:
@@ -435,39 +514,167 @@ def execute_generation(db: Session, settings: Settings, job: PracticeJob, *, wor
                 message = str(issue.get("msg") or issue.get("type") or "invalid")[:240]
                 issues.append(f"{location}: {message}")
             return issues
-        code = str(exc)
-        return [code] if code and len(code) <= 100 else ["invalid_practice_artifact"]
+        # Slice 5 (Spec 005 §8 / Codex review Medium): always use the staged
+        # error code instead of the generic invalid_practice_artifact fallback.
+        # Specific codes (practice_citation_invalid, practice_formula_invalid,
+        # practice_duplicate, practice_artifact_schema_invalid) are stable for
+        # monitoring and repair routing; the generic code is not.
+        return [_structure_error_code(exc)]
 
     generated, submit_started = submit_attempt(build_practice_generation_prompt(request, evidence))
+    # Spec 005 §7.2: structure repair and novelty repair share ONE provider-call
+    # slot ("structure/novelty repair 合计 1"). At most one of them may fire.
+    structure_or_novelty_repair_used = False
     try:
         artifact = PracticeSetArtifact.model_validate(generated)
         validate_practice_citations(artifact, set(chunks))
         _validate_target_keys(artifact, request)
         _validate_requested_item_types(artifact, request, item_type_mode)
         _validate_practice_formula_content(artifact)
-        _validate_practice_novelty(artifact, request.prior_stems)
     except (ValidationError, ValueError) as exc:
+        # Correction 002 §B: classify the error to determine the repair path.
+        # Set-level errors (item count, duplicate item_key, cross-Item constraints)
+        # go to whole-Set structure repair. Specialized-item-level errors
+        # (coding/scientific field, canonical source, reference/starter contract)
+        # skip whole-Set repair and go directly to specialized single-item repair.
+        # General-item-level errors go to whole-Set structure repair.
+        error_level = _classify_validation_error(exc)
         issues = validation_issues(exc)
-        logger.warning("practice artifact validation failed job=%s issues=%s", job.id, issues)
-        _tool_call(db, run, "SubmitPracticeSet", ordinal, None, None, submit_started, "failed", "invalid_practice_artifact")
-        if provider_calls >= settings.practice_generation_max_provider_calls or ordinal >= settings.practice_generation_max_attempt_steps:
-            raise ValueError("invalid_practice_artifact") from exc
-        repaired, repair_started = submit_attempt(build_practice_repair_prompt(request, evidence, generated, issues))
-        try:
-            artifact = PracticeSetArtifact.model_validate(repaired)
-            validate_practice_citations(artifact, set(chunks))
-            _validate_target_keys(artifact, request)
-            _validate_requested_item_types(artifact, request, item_type_mode)
-            _validate_practice_formula_content(artifact)
-            _validate_practice_novelty(artifact, request.prior_stems)
-        except (ValidationError, ValueError) as repair_exc:
-            logger.warning("practice artifact repair validation failed job=%s issues=%s", job.id, validation_issues(repair_exc))
-            _tool_call(db, run, "SubmitPracticeSet", ordinal, None, None, repair_started, "failed", "invalid_practice_artifact")
-            raise ValueError("invalid_practice_artifact") from repair_exc
+        code = _structure_error_code(exc)
+        logger.warning("practice artifact validation failed job=%s issues=%s level=%s", job.id, issues, error_level)
+        _tool_call(db, run, "SubmitPracticeSet", ordinal, None, None, submit_started, "failed", code)
+
+        if error_level == "specialized_item_level":
+            # Correction 002 §B: specialized item schema/canonical errors skip
+            # whole-Set structure repair entirely. They will be caught by the
+            # specialized validation below (validate_coding_items /
+            # validate_scientific_items) and handled via minimal single-item
+            # repair. We must still parse the artifact to get past this point
+            # so the specialized validation can run. Use a lenient parse that
+            # recovers the Set envelope and items, then let the specialized
+            # validator flag the specific item.
+            try:
+                artifact = PracticeSetArtifact.model_validate(generated)
+            except (ValidationError, ValueError):
+                # Two-phase preserving recovery: extract the Set envelope,
+                # parse each item individually. For items that fail strict
+                # parsing, construct a placeholder from the raw payload so
+                # the item is NOT silently dropped. The specialized
+                # validation below will detect the broken reference and
+                # trigger single-item repair.
+                try:
+                    envelope = generated if isinstance(generated, dict) else {}
+                    raw_items = envelope.get("items", [])
+                    if not raw_items:
+                        raise ValueError("practice_artifact_schema_invalid") from exc
+                    recovered_items: list[PracticeItemArtifact] = []
+                    for raw_item in raw_items:
+                        try:
+                            recovered_items.append(PracticeItemArtifact.model_validate(raw_item))
+                        except (ValidationError, ValueError) as item_exc:
+                            # Don't silently drop. Try to construct a placeholder
+                            # from the raw payload's identity and public fields.
+                            # Preserve the structured validation errors so callers
+                            # know WHY the item failed strict parsing.
+                            item_errors: list[str] = []
+                            if isinstance(item_exc, ValidationError):
+                                for issue in item_exc.errors()[:12]:
+                                    location = ".".join(str(part) for part in issue.get("loc", ()))
+                                    message = str(issue.get("msg") or issue.get("type") or "invalid")[:240]
+                                    item_errors.append(f"{location}: {message}")
+                            else:
+                                item_errors.append(str(item_exc)[:240])
+                            recovery = _recover_specialized_item_placeholder(raw_item, item_validation_errors=item_errors)
+                            if recovery is not None:
+                                placeholder, _structured_errors = recovery
+                                # AGENTS.md / ADR 007 §3.7 log boundary: never emit the
+                                # raw exception body, provider field values, stems, code,
+                                # test content, compiler stderr, absolute paths or the full
+                                # structured_errors list. Only item_key plus bounded,
+                                # allow-listed field names/categories derived from item_exc
+                                # are logged. _structured_errors is intentionally unused
+                                # here; it is kept on the return contract for callers but
+                                # is never logged verbatim.
+                                safe_diag = _safe_recovery_diagnostics(item_exc)
+                                logger.warning(
+                                    "recovered specialized placeholder item_key=%s count=%s diagnostics=%s truncated=%s",
+                                    placeholder.item_key,
+                                    safe_diag["validation_error_count"],
+                                    safe_diag["diagnostics"],
+                                    safe_diag["truncated"],
+                                )
+                                recovered_items.append(placeholder)
+                            else:
+                                # Cannot recover even a placeholder — the item is
+                                # too malformed. This is a stable failure.
+                                raise ValueError("practice_artifact_schema_invalid") from item_exc
+                    if not recovered_items:
+                        raise ValueError("practice_artifact_schema_invalid") from exc
+                    # Use model_construct to avoid re-running item-level
+                    # _consistency validators on placeholder items (which
+                    # intentionally carry broken reference_solution that
+                    # would fail item-level validation). Then manually
+                    # verify Set-level invariants (duplicate item_key,
+                    # specialized item count, general item type presence).
+                    artifact = PracticeSetArtifact.model_construct(items=recovered_items)
+                    _validate_recovered_set_invariants(artifact)
+                except (ValidationError, ValueError):
+                    # Cannot recover at all — raise the original error
+                    raise ValueError(code) from exc
         else:
-            _tool_call(db, run, "SubmitPracticeSet", ordinal, None, len(artifact.items), repair_started, "succeeded")
+            # Set-level or general-item-level: whole-Set structure repair
+            if provider_calls >= settings.practice_generation_max_provider_calls or ordinal >= settings.practice_generation_max_attempt_steps:
+                raise ValueError(code) from exc
+            repaired, repair_started = submit_attempt(build_practice_repair_prompt(request, evidence, generated, issues))
+            try:
+                artifact = PracticeSetArtifact.model_validate(repaired)
+                validate_practice_citations(artifact, set(chunks))
+                _validate_target_keys(artifact, request)
+                _validate_requested_item_types(artifact, request, item_type_mode)
+                _validate_practice_formula_content(artifact)
+            except (ValidationError, ValueError) as repair_exc:
+                repair_code = _structure_error_code(repair_exc)
+                logger.warning("practice artifact repair validation failed job=%s issues=%s", job.id, validation_issues(repair_exc))
+                _tool_call(db, run, "SubmitPracticeSet", ordinal, None, None, repair_started, "failed", repair_code)
+                raise ValueError(repair_code) from repair_exc
+            else:
+                _tool_call(db, run, "SubmitPracticeSet", ordinal, None, len(artifact.items), repair_started, "succeeded")
+                structure_or_novelty_repair_used = True
     else:
         _tool_call(db, run, "SubmitPracticeSet", ordinal, None, len(artifact.items), submit_started, "succeeded")
+
+    # Novelty (Spec 005 §9 / ADR 007 §3.3, Codex review Medium): a duplicate is
+    # fixed by a TARGETED single-item repair, NOT a whole-Set rewrite. The
+    # item's identity/evidence are pinned; only the question is re-posed. Shares
+    # the single structure/novelty repair slot, so it cannot run if structure
+    # repair already consumed it.
+    novelty_dup = _find_novelty_duplicate(artifact, tuple(prior_items))
+    if novelty_dup is not None:
+        if structure_or_novelty_repair_used or provider_calls >= settings.practice_generation_max_provider_calls or ordinal >= settings.practice_generation_max_attempt_steps:
+            raise ValueError("practice_duplicate")
+        dup_item = next(it for it in artifact.items if it.item_key == novelty_dup)
+        repaired_raw, novelty_started = provider_step(
+            build_novelty_item_repair_prompt(request, evidence, dup_item, request.prior_stems),
+            settings.practice_generation_max_output_tokens,
+        )
+        try:
+            novelty_set = PracticeSetArtifact.model_validate(repaired_raw)
+            if len(novelty_set.items) != 1 or novelty_set.items[0].item_key != novelty_dup \
+                    or novelty_set.items[0].item_type != dup_item.item_type \
+                    or novelty_set.items[0].target_key != dup_item.target_key:
+                raise ValueError("novelty repair must return exactly the duplicate item with preserved identity")
+            validate_practice_citations(novelty_set, set(chunks))
+            _validate_target_keys(novelty_set, request)
+            _validate_practice_formula_content(novelty_set)
+        except (ValidationError, ValueError) as nexc:
+            _tool_call(db, run, "RepairNoveltyItem", ordinal, None, None, novelty_started, "failed", "practice_duplicate")
+            raise ValueError("practice_duplicate") from nexc
+        merged_novelty = _merge_novelty_repair(dup_item, novelty_set.items[0])
+        artifact = PracticeSetArtifact(items=[merged_novelty if it.item_key == novelty_dup else it for it in artifact.items])
+        if _find_novelty_duplicate(artifact, tuple(prior_items)) is not None:
+            _tool_call(db, run, "RepairNoveltyItem", ordinal, None, None, novelty_started, "failed", "practice_duplicate")
+            raise ValueError("practice_duplicate")
+        _tool_call(db, run, "RepairNoveltyItem", ordinal, None, 1, novelty_started, "succeeded")
 
     # Per Correction 012 §3: validate coding item reference solutions
     # BEFORE any Set/Item is persisted. If any required coding
@@ -486,17 +693,20 @@ def execute_generation(db: Session, settings: Settings, job: PracticeJob, *, wor
         db.flush()
         return auth
 
-    def validate_coding_items(candidate: PracticeSetArtifact, phase: str) -> list[str]:
-        failed_items: list[str] = []
-        coding_items = [item for item in candidate.items if item.item_type == "coding"]
-        for coding_item_artifact in coding_items:
+    def validate_coding_items(candidate: PracticeSetArtifact, phase: str) -> list[tuple[str, str, str]]:
+        """Return ``(item_key, stable_error_code, repair_category)`` for each
+        failed coding item. Infrastructure failures raise ``code_execution_unavailable``
+        immediately (delivery-retryable). Stable codes per Spec 005 §8."""
+        failures: list[tuple[str, str, str]] = []
+        for coding_item_artifact in (it for it in candidate.items if it.item_type == "coding"):
             _check_active(db, job, worker_id, started=started, wall_limit=settings.practice_generation_max_wall_seconds, lease_lost=lease_lost)
             reference_solution = coding_item_artifact.reference_solution or ""
             hidden_tests_raw = list(coding_item_artifact.public_examples or []) + list(coding_item_artifact.hidden_tests or [])
             language = coding_item_artifact.language or "python"
+            item_key = coding_item_artifact.item_key
 
             if not reference_solution or not hidden_tests_raw:
-                failed_items.append(f"{coding_item_artifact.item_key}: missing reference solution or tests")
+                failures.append((item_key, "coding_reference_test_failed", "test_mismatch"))
                 continue
 
             # Convert CodingTestCase to dict for _validate_coding_reference_via_mcp
@@ -509,21 +719,22 @@ def execute_generation(db: Session, settings: Settings, job: PracticeJob, *, wor
                 hidden_tests=hidden_tests,
                 language=language,
                 settings=settings,
-                request_id_prefix=f"ref-{phase}-{job.id[:12]}-{coding_item_artifact.item_key}",
+                request_id_prefix=f"ref-{phase}-{job.id[:12]}-{item_key}",
+                harness_version=harness_version,
             )
 
             if validation.infrastructure_failure:
                 _tool_call(db, run, "ValidateCodingReference", ordinal, None, None, call_started, "failed", "infrastructure_failure")
-                raise ValueError("coding_reference_validation_infrastructure_failure")
+                raise ValueError("code_execution_unavailable")
 
-            reference_passed = validation.passed
-            if not reference_passed:
+            if not validation.passed:
+                raw_categories = ",".join(validation.error_categories) or "test_mismatch"
+                code, category = _coding_reference_stable_code(raw_categories)
                 _tool_call(db, run, "ValidateCodingReference", ordinal, None, validation.tests_passed, call_started, "failed", "reference_failed_tests")
-                categories = ",".join(validation.error_categories) or "test_mismatch"
-                failed_items.append(f"{coding_item_artifact.item_key}: reference {categories}")
+                failures.append((item_key, code, category))
                 logger.warning(
                     "coding reference validation failed for job %s item_key %s: %d/%d tests passed",
-                    job.id, coding_item_artifact.item_key, validation.tests_passed, validation.tests_total,
+                    job.id, item_key, validation.tests_passed, validation.tests_total,
                 )
             else:
                 _tool_call(db, run, "ValidateCodingReference", ordinal, None, validation.tests_passed, call_started)
@@ -535,7 +746,7 @@ def execute_generation(db: Session, settings: Settings, job: PracticeJob, *, wor
             # A broken reference is repaired first. Running the starter after
             # that failure adds no useful evidence and can mislabel a content
             # failure as an infrastructure failure if the second call flakes.
-            if starter_code and reference_passed:
+            if starter_code and validation.passed:
                 starter_started = time.perf_counter()
                 consume_tool_authorization("code_execution")
                 starter_validation = _validate_coding_reference_via_mcp(
@@ -543,24 +754,45 @@ def execute_generation(db: Session, settings: Settings, job: PracticeJob, *, wor
                     hidden_tests=hidden_tests,
                     language=language,
                     settings=settings,
-                    request_id_prefix=f"starter-{phase}-{job.id[:12]}-{coding_item_artifact.item_key}",
+                    request_id_prefix=f"starter-{phase}-{job.id[:12]}-{item_key}",
+                    harness_version=harness_version,
                 )
                 if starter_validation.infrastructure_failure:
                     _tool_call(db, run, "ValidateCodingStarter", ordinal, None, None, starter_started, "failed", "infrastructure_failure")
-                    raise ValueError("coding_reference_validation_infrastructure_failure")
+                    raise ValueError("code_execution_unavailable")
                 if starter_validation.passed:
                     _tool_call(db, run, "ValidateCodingStarter", ordinal, None, starter_validation.tests_passed, starter_started, "failed", "starter_reveals_solution")
-                    failed_items.append(f"{coding_item_artifact.item_key}: starter_reveals_solution")
+                    failures.append((item_key, "coding_starter_invalid", "starter_reveals_solution"))
                 else:
                     _tool_call(db, run, "ValidateCodingStarter", ordinal, None, starter_validation.tests_passed, starter_started)
-        return failed_items
+        return failures
 
-    def validate_scientific_items(candidate: PracticeSetArtifact) -> None:
+    def validate_scientific_items(candidate: PracticeSetArtifact) -> list[tuple[str, str, str]]:
+        """Return ``(item_key, stable_error_code, repair_category)`` for each
+        scientific item whose remote verification was insufficient. Items that
+        do not need remote verification pass locally. Infrastructure failures
+        raise ``science_tool_unavailable`` (delivery-retryable)."""
         from learn_platform_api.services.science_tool_service import execute_science_verification
 
-        for scientific_item in (item for item in candidate.items if item.item_type == "scientific"):
+        failures: list[tuple[str, str, str]] = []
+        for scientific_item in (it for it in candidate.items if it.item_type == "scientific"):
             spec = scientific_item.scientific_answer_spec
-            if spec is None or not spec.needs_remote_verification:
+            if spec is None:
+                # A scientific item whose spec is missing or unparseable is
+                # flagged (scientific_spec_missing, spec_missing) and routed to
+                # specialized single-item repair (Spec 005 §8 science reference
+                # bucket / ADR 007 §3.3). The ScientificReferenceRepairArtifact
+                # minimal DTO supplies a brand-new, complete
+                # scientific_answer_spec plus reference_answer; immutable fields
+                # (rubric, stem, citation_ids) stay pinned from the original.
+                # If the repair artifact is invalid or re-validation still
+                # fails, the Job ends with the approved stable code
+                # (scientific_repair_artifact_invalid /
+                # scientific_repair_revalidation_failed) rather than silently
+                # persisting a broken item.
+                failures.append((scientific_item.item_key, "scientific_spec_missing", "spec_missing"))
+                continue
+            if not spec.needs_remote_verification:
                 continue
             auth = consume_tool_authorization("science_computation")
             call_started = time.perf_counter()
@@ -573,44 +805,156 @@ def execute_generation(db: Session, settings: Settings, job: PracticeJob, *, wor
             _check_active(db, job, worker_id, started=started, wall_limit=settings.practice_generation_max_wall_seconds, lease_lost=lease_lost)
             observation = result.observation or {}
             verified = observation.get("verified") is True or observation.get("equivalent") is True or str(observation.get("result", "")).strip().casefold() == "true"
-            if not result.success or not verified:
+            if not result.success:
+                _tool_call(db, run, "VerifyScientificAnswer", ordinal, None, None, call_started, "failed", result.error_code or "science_tool_unavailable")
+                raise ValueError("science_tool_unavailable")
+            if not verified:
                 _tool_call(db, run, "VerifyScientificAnswer", ordinal, None, None, call_started, "failed", result.error_code or "answer_not_verified")
-                raise ValueError("scientific_answer_verification_failed")
-            _tool_call(db, run, "VerifyScientificAnswer", ordinal, None, 1, call_started)
+                failures.append((scientific_item.item_key, "scientific_reference_unverified", "science_unverified"))
+            else:
+                _tool_call(db, run, "VerifyScientificAnswer", ordinal, None, 1, call_started)
+        return failures
 
-    failed_items = validate_coding_items(artifact, "initial")
-    if failed_items:
+    harness_version = harness_for_artifact(job.artifact_contract_version)
+    specialized_failures = validate_coding_items(artifact, "initial") + validate_scientific_items(artifact)
+    if specialized_failures:
+        # ADR 007 §3.3 / Correction 002 §A: at most one specialized repair per
+        # Set, fixing ONLY the failed item. The provider returns a STRICT minimal
+        # DTO (CodingReferenceRepairArtifact or ScientificReferenceRepairArtifact)
+        # that only contains the mutable fields (reference_solution, starter_code
+        # for coding; scientific_answer_spec, reference_answer for scientific).
+        # Immutable fields (hidden_tests, stem, citation_ids, language, etc.) are
+        # copied from the original item during merge, never from the provider.
+        item_key, user_code, category = specialized_failures[0]
+        failed_item = next(it for it in artifact.items if it.item_key == item_key)
+
+        # Correction 002 §C: build safe position summary using the structured
+        # function (bounded, desensitized — no paths, no hidden test content,
+        # no full stderr). The summary is derived from the validation result
+        # that caused the failure, not from ad-hoc string concatenation.
+        safe_summary = None
+        if failed_item.item_type == "coding":
+            # Reconstruct a CodingReferenceValidationResult-like summary from
+            # the failure category. We don't have the original validation result
+            # here, so we build the summary from the stable category and language.
+            safe_summary = _build_safe_position_summary(
+                language=getattr(failed_item, "language", "python"),
+                validation_result=CodingReferenceValidationResult(
+                    passed=False,
+                    tests_passed=0,
+                    tests_total=0,
+                    error_categories=[category],
+                    infrastructure_failure=False,
+                ),
+            )
+
         repaired_raw, repair_started = provider_step(
-            build_practice_repair_prompt(
-                request,
-                evidence,
-                artifact.model_dump(mode="json"),
-                validation_issues=[
-                    f"coding validation: {issue}; repair the reference and starter while preserving the fixed solve contract"
-                    for issue in failed_items
-                ],
+            build_specialized_item_repair_prompt(
+                request, evidence, failed_item, category=category, harness_version=harness_version,
+                safe_position_summary=safe_summary,
             ),
             settings.practice_generation_max_output_tokens,
         )
         try:
-            repaired_artifact = PracticeSetArtifact.model_validate(repaired_raw)
-            validate_practice_citations(repaired_artifact, set(chunks))
-            _validate_target_keys(repaired_artifact, request)
-            _validate_requested_item_types(repaired_artifact, request, item_type_mode)
-            _validate_practice_formula_content(repaired_artifact)
+            # Correction 002 §A: validate the repair response using the STRICT
+            # minimal DTO, NOT the full PracticeSetArtifact. The minimal DTO
+            # forbids extra fields (hidden_tests, stem, citation_ids, language,
+            # etc.) at the Pydantic level, producing a stable
+            # coding_repair_artifact_invalid / scientific_repair_artifact_invalid
+            # error instead of collapsing to a generic schema error.
+            if failed_item.item_type == "coding":
+                repair_artifact = CodingReferenceRepairArtifact.model_validate(repaired_raw)
+                if repair_artifact.item_key != item_key:
+                    raise ValueError("specialized repair changed item identity: item_key mismatch")
+                # Merge: copy all immutable fields from original, only set
+                # reference_solution and starter_code from the minimal DTO.
+                new_item = _merge_minimal_coding_repair(failed_item, repair_artifact)
+            elif failed_item.item_type == "scientific":
+                repair_artifact = ScientificReferenceRepairArtifact.model_validate(repaired_raw)
+                if repair_artifact.item_key != item_key:
+                    raise ValueError("specialized repair changed item identity: item_key mismatch")
+                new_item = _merge_minimal_scientific_repair(failed_item, repair_artifact)
+            else:
+                # Fallback for unexpected types (should not happen)
+                raise ValueError("specialized repair for unsupported item type")
         except (ValidationError, ValueError) as exc:
-            _tool_call(db, run, "RepairCodingReference", ordinal, None, None, repair_started, "failed", "invalid_practice_artifact")
-            raise ValueError("coding_reference_validation_failed") from exc
-        if validate_coding_items(repaired_artifact, "repair"):
-            _tool_call(db, run, "RepairCodingReference", ordinal, None, 0, repair_started, "failed", "coding_reference_validation_failed")
-            raise ValueError("coding_reference_validation_failed")
-        artifact = repaired_artifact
-        _tool_call(db, run, "RepairCodingReference", ordinal, None, len(artifact.items), repair_started, "succeeded")
+            # Correction 002 §D: use a STABLE error code for the repair artifact
+            # being invalid, distinct from the repair-then-revalidate failure code.
+            repair_invalid_code = (
+                CODING_REPAIR_ARTIFACT_INVALID if failed_item.item_type == "coding"
+                else SCIENTIFIC_REPAIR_ARTIFCAT_INVALID
+            )
+            _tool_call(db, run, "RepairSpecializedItem", ordinal, None, None, repair_started, "failed", repair_invalid_code)
+            # Correction 002 §D: propagate the stable repair-invalid code to the Job,
+            # NOT the original user_code (coding_reference_test_failed).
+            raise ValueError(repair_invalid_code) from exc
+        merged_item = new_item
+        merged_set = PracticeSetArtifact(items=[merged_item])
+        # Correction 002 §D: re-validation after repair uses original hidden tests
+        # and pinned harness version. Provider-returned tests have NO authority.
+        # Repair artifact invalid vs repair-then-revalidate failure use DIFFERENT
+        # stable error codes.
+        re_failures = validate_coding_items(merged_set, "repair") if merged_item.item_type == "coding" else validate_scientific_items(merged_set)
+        if re_failures:
+            # Correction 002 §D: distinct stable code for re-validation failure
+            reval_code = (
+                CODING_REPAIR_REVALIDATION_FAILED if merged_item.item_type == "coding"
+                else SCIENTIFIC_REPAIR_REVALIDATION_FAILED
+            )
+            _tool_call(db, run, "RepairSpecializedItem", ordinal, None, None, repair_started, "failed", reval_code)
+            # Correction 002 §D: propagate the stable revalidation-failed code to the Job,
+            # NOT the original user_code (coding_reference_test_failed).
+            raise ValueError(reval_code)
+        # Substitute only the repaired item; every other item/citation is untouched.
+        artifact = PracticeSetArtifact(items=[merged_item if it.item_key == item_key else it for it in artifact.items])
+        _tool_call(db, run, "RepairSpecializedItem", ordinal, None, 1, repair_started, "succeeded")
+        # Re-validate the complete Set after specialized repair to ensure
+        # item count, requested types, citations, targets, and formula
+        # all still hold. The repair only changed one item's reference
+        # fields, but we must confirm the full Set is consistent.
+        try:
+            validate_practice_citations(artifact, set(chunks))
+            _validate_target_keys(artifact, request)
+            _validate_requested_item_types(artifact, request, item_type_mode)
+            _validate_practice_formula_content(artifact)
+        except (ValidationError, ValueError) as post_repair_exc:
+            post_repair_code = _structure_error_code(post_repair_exc)
+            _tool_call(db, run, "RepairSpecializedItem", ordinal, None, None, repair_started, "failed", post_repair_code)
+            raise ValueError(post_repair_code) from post_repair_exc
 
-    validate_scientific_items(artifact)
+    # Unconditional full-validation gate before persistence (Codex review High 2):
+    # Regardless of how the artifact was constructed (normal parse, structure
+    # repair, specialized-item recovery via model_construct, or novelty repair),
+    # the complete artifact MUST pass strict Pydantic validation plus all
+    # structural checks before it is allowed to reach _commit_set().
+    # This prevents model_construct() placeholders from bypassing the full
+    # contract and persisting items that Pydantic would reject.
+    # The validated artifact is reassigned so _commit_set receives the
+    # Pydantic-normalized authoritative object, not the original
+    # model_construct instance.
+    try:
+        artifact = PracticeSetArtifact.model_validate(artifact.model_dump(mode="json"))
+        validate_practice_citations(artifact, set(chunks))
+        _validate_target_keys(artifact, request)
+        _validate_requested_item_types(artifact, request, item_type_mode)
+        _validate_practice_formula_content(artifact)
+    except (ValidationError, ValueError) as gate_exc:
+        gate_code = _structure_error_code(gate_exc)
+        logger.warning("practice artifact failed final validation gate job=%s code=%s", job.id, gate_code)
+        raise ValueError(gate_code) from gate_exc
 
-    # Final authoritative re-check (owner + lease + scope + sources) before commit.
-    _assert_generation_authority(db, job, worker_id, lease_lost)
+    # This is deliberately the last gate before persistence. Validation itself
+    # is bounded work, but it must not create a window in which an expired wall
+    # budget or replaced lease can still commit a Set.
+    _assert_generation_authority(
+        db,
+        job,
+        worker_id,
+        lease_lost,
+        started=started,
+        wall_limit=settings.practice_generation_max_wall_seconds,
+    )
+
     practice_set = _commit_set(db, job, artifact, chunks, sources)
 
     run.status = "succeeded"
@@ -630,17 +974,36 @@ def execute_generation(db: Session, settings: Settings, job: PracticeJob, *, wor
 
 
 def _commit_set(db: Session, job: PracticeJob, artifact: PracticeSetArtifact, chunks: dict[str, DocumentChunk], sources: dict[str, PracticeJobSource]) -> PracticeSet:
+    artifact_version = job.artifact_contract_version or ARTIFACT_CONTRACT_V1
+    harness = harness_for_artifact(artifact_version)
     practice_set = PracticeSet(
         workspace_id=job.workspace_id, course_id=job.course_id, course_version_id=job.course_version_id,
         lesson_id=job.lesson_id, lesson_version_id=job.lesson_version_id, practice_job_id=job.id,
         output_language=job.output_language, difficulty=job.difficulty, item_count=len(artifact.items),
-        generation_config={"item_count": job.item_count, "difficulty": job.difficulty, "output_language": job.output_language},
+        generation_config={
+            "item_count": job.item_count, "difficulty": job.difficulty, "output_language": job.output_language,
+            # Slice 5 (ADR 007 §3.1): pin the artifact contract on the successful
+            # Set so historical Sets stay readable/gradable under their own version.
+            "artifact_contract_version": artifact_version,
+            "novelty_policy_version": NOVELTY_POLICY_VERSION,
+            "novelty_hard_threshold": NOVELTY_HARD_THRESHOLD,
+            "novelty_soft_threshold": NOVELTY_SOFT_THRESHOLD,
+        },
         lifecycle_status="active", created_at=now(),
     )
     db.add(practice_set)
     db.flush()
     for index, item in enumerate(artifact.items):
-        answer_spec = _answer_spec(item)
+        # Guard up front: a scientific item with scientific_answer_spec=None is
+        # a contract violation. Both _answer_spec and the interaction_spec
+        # builder below dereference item.scientific_answer_spec, so checking
+        # here (before _answer_spec) makes the failure a controlled ValueError
+        # instead of an AttributeError mid-commit. In normal flow the final
+        # full-validation gate already rejects spec=None scientific items before
+        # _commit_set is reached; this guard is the defensive backstop.
+        if item.item_type == "scientific" and item.scientific_answer_spec is None:
+            raise ValueError("scientific requires a scientific_answer_spec")
+        answer_spec = _answer_spec(item, harness)
         # Build interaction_spec for coding items from the artifact
         interaction_spec = None
         if item.item_type == "coding":
@@ -651,7 +1014,7 @@ def _commit_set(db: Session, job: PracticeJob, artifact: PracticeSetArtifact, ch
                 "output_description": item.output_description or "UTF-8 text returned by solve",
                 "constraints": list(item.constraints or []),
                 "public_examples": [{"input": case.input, "expected_output": case.expected_output} for case in (item.public_examples or [])],
-                "contract": "solve_utf8_string_v1",
+                "contract": harness,
                 "runtime": "isolated",
                 "time_limit_seconds": 3,
                 "output_limit_bytes": 32768,
@@ -680,7 +1043,7 @@ def _commit_set(db: Session, job: PracticeJob, artifact: PracticeSetArtifact, ch
     return practice_set
 
 
-def _answer_spec(item) -> dict[str, Any]:
+def _answer_spec(item, harness_version: str = HARNESS_V1) -> dict[str, Any]:
     target = {"_learning_target_key": item.target_key}
     if item.item_type == "single_choice":
         return target | {
@@ -690,14 +1053,14 @@ def _answer_spec(item) -> dict[str, Any]:
         }
     if item.item_type == "coding":
         # Coding items carry hidden_tests, reference_solution, language, etc.
-        # in their answer_spec. These come from the LLM artifact or are
-        # set directly when coding items are created.
+        # in their answer_spec. harness_version pins the canonical wrapper the
+        # grader must dispatch to (ADR 007 §3.1).
         return target | {
             "reference_solution": getattr(item, 'reference_solution', None) or "",
             "public_tests": [case.model_dump() | {"is_public": True} for case in (item.public_examples or [])],
             "hidden_tests": [case.model_dump() for case in (item.hidden_tests or [])],
             "language": getattr(item, 'language', None) or "python",
-            "harness_version": "solve_utf8_string_v1",
+            "harness_version": harness_version,
             "citation_ids": list(item.citation_ids),
         }
     if item.item_type == "scientific":
@@ -753,26 +1116,621 @@ def _normalized_stem(value: str) -> str:
     return "".join(character.casefold() for character in value if character.isalnum())
 
 
-def _validate_practice_novelty(artifact: PracticeSetArtifact, prior_stems: tuple[str, ...]) -> None:
-    """Reject exact normalized repeats; semantic variation remains provider-owned.
+def _char3grams(value: str) -> frozenset[str]:
+    """Character 3-grams over the alphanumeric-normalized stem (Spec 005 §9)."""
+    folded = _normalized_stem(value)
+    if len(folded) < 3:
+        return frozenset({folded}) if folded else frozenset()
+    return frozenset(folded[i:i + 3] for i in range(len(folded) - 2))
 
-    The bounded prior-stem list is also supplied to the author prompt, where it
-    acts only as negative examples.  The service-side check is deterministic and
-    catches punctuation/spacing/case variants without inventing a similarity
-    threshold that could reject legitimately related questions.
+
+def _task_tokens(value: str) -> frozenset[str]:
+    """Significant tokens used to scope near-duplicate detection to the same
+    target/type/task signature (Spec 005 §9). Latin/numeric words (length >= 3)
+    plus individual CJK ideographs, so the signature works for both EN and ZH."""
+    folded = value.casefold()
+    tokens: set[str] = {t for t in re.findall(r"[A-Za-z0-9]+", folded) if len(t) >= 3}
+    tokens.update(ch for ch in folded if "一" <= ch <= "鿿")
+    return frozenset(tokens)
+
+
+def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _find_novelty_duplicate(
+    artifact: PracticeSetArtifact,
+    prior_items: tuple[tuple[str, str, str], ...],
+) -> str | None:
+    """Return the item_key of the first exact or bounded near-duplicate item
+    (Spec 005 §9 / ADR 007 §3.8), or None if all items are novel. Detection
+    rules mirror ``_validate_practice_novelty``; returning the key lets the
+    caller run a TARGETED single-item repair instead of a whole-Set rewrite.
     """
-    prior = {_normalized_stem(stem) for stem in prior_stems if _normalized_stem(stem)}
-    current: set[str] = set()
+    prior: list[tuple[str, str, str, frozenset[str], frozenset[str]]] = []
+    for target_key, item_type, stem in prior_items:
+        if not stem:
+            continue
+        prior.append((target_key, item_type, _normalized_stem(stem), _char3grams(stem), _task_tokens(stem)))
+    current: list[tuple[str, str, str, frozenset[str], frozenset[str]]] = []
     for item in artifact.items:
         normalized = _normalized_stem(item.stem)
-        if normalized in prior or normalized in current:
-            raise ValueError("duplicate_practice_item")
-        current.add(normalized)
+        grams = _char3grams(item.stem)
+        tokens = _task_tokens(item.stem)
+        for pt, pty, pnorm, _pgrams, _ptokens in (*prior, *current):
+            if normalized and pt == item.target_key and pty == item.item_type and normalized == pnorm:
+                return item.item_key
+        for pt, pty, _pnorm, pgrams, ptokens in (*prior, *current):
+            if not pt or pt != item.target_key or pty != item.item_type:
+                continue
+            if _jaccard(ptokens, tokens) < 0.5:
+                continue
+            if _jaccard(pgrams, grams) >= NOVELTY_HARD_THRESHOLD:
+                return item.item_key
+        current.append((item.target_key, item.item_type, normalized, grams, tokens))
+    return None
+
+
+def _validate_practice_novelty(
+    artifact: PracticeSetArtifact,
+    prior_items: tuple[tuple[str, str, str], ...],
+) -> None:
+    """Reject exact and bounded near-duplicate items (Spec 005 §9 / ADR 007 §3.8).
+    Thin wrapper over ``_find_novelty_duplicate`` that raises on the first dup."""
+    dup = _find_novelty_duplicate(artifact, prior_items)
+    if dup is not None:
+        raise ValueError("duplicate_practice_item")
+
+
+def _recover_specialized_item_placeholder(
+    raw_item: dict[str, Any],
+    item_validation_errors: list[str] | None = None,
+) -> tuple[PracticeItemArtifact, list[str]] | None:
+    """Construct a placeholder PracticeItemArtifact from a raw provider payload
+    that failed strict validation. The placeholder preserves the item's identity
+    and ALL original fields (including the broken reference_solution) so that
+    specialized reference validation (validate_coding_items /
+    validate_scientific_items) will detect the broken reference and trigger
+    single-item repair.
+
+    The placeholder is constructed via model_construct to bypass item-level
+    _consistency validation (which would reject the broken reference). The
+    Set-level invariants (duplicate item_key, specialized item count, etc.)
+    are checked separately by _validate_recovered_set_invariants.
+
+    Returns ``(placeholder, structured_errors)`` where ``structured_errors``
+    preserves the Pydantic validation error messages from the original
+    strict-parse failure. These errors are NOT consumed by repair — they
+    exist so that callers can determine WHY the item failed strict parsing
+    and decide whether immutable-field violations should cause a stable
+    failure (they cannot be repaired).
+
+    Returns None if the raw payload is too malformed to recover even a placeholder.
+    Only coding and scientific items are recovered — general items that fail
+    parsing should go to whole-Set repair instead.
+    """
+    if not isinstance(raw_item, dict):
+        return None
+    item_key = raw_item.get("item_key")
+    item_type = raw_item.get("item_type")
+    target_key = raw_item.get("target_key")
+    # Must have identity fields
+    if not item_key or not item_type or not target_key:
+        return None
+    # Only recover specialized items (coding/scientific)
+    if item_type not in ("coding", "scientific"):
+        return None
+    try:
+        stem = str(raw_item.get("stem", ""))[:4000] or f"Item {item_key}"
+        citation_ids = raw_item.get("citation_ids", []) or []
+        errors = list(item_validation_errors) if item_validation_errors else []
+        if item_type == "coding":
+            # Parse hidden_tests and public_examples into proper CodingTestCase
+            # objects so validate_coding_items can process them.
+            hidden_tests_raw = raw_item.get("hidden_tests") or []
+            hidden_tests = [CodingTestCase.model_validate(tc) for tc in hidden_tests_raw if isinstance(tc, dict)]
+            public_examples_raw = raw_item.get("public_examples") or []
+            public_examples = [CodingTestCase.model_validate(tc) for tc in public_examples_raw if isinstance(tc, dict)]
+            placeholder = PracticeItemArtifact.model_construct(
+                item_key=item_key,
+                target_key=target_key,
+                item_type="coding",
+                stem=stem,
+                citation_ids=citation_ids,
+                language=raw_item.get("language", "python"),
+                hidden_tests=hidden_tests if hidden_tests else None,
+                reference_solution=raw_item.get("reference_solution", ""),
+                starter_code=raw_item.get("starter_code"),
+                input_description=raw_item.get("input_description"),
+                output_description=raw_item.get("output_description"),
+                constraints=raw_item.get("constraints"),
+                public_examples=public_examples if public_examples else None,
+            )
+        elif item_type == "scientific":
+            # Parse rubric into proper PracticeRubricCriterion objects
+            rubric_raw = raw_item.get("rubric") or []
+            rubric = [PracticeRubricCriterion.model_validate(c) for c in rubric_raw if isinstance(c, dict)]
+            # Parse scientific_answer_spec if present
+            scientific_answer_spec_raw = raw_item.get("scientific_answer_spec")
+            scientific_answer_spec = None
+            if isinstance(scientific_answer_spec_raw, dict):
+                try:
+                    scientific_answer_spec = ScientificAnswerSpec.model_validate(scientific_answer_spec_raw)
+                except (ValidationError, ValueError):
+                    pass
+            placeholder = PracticeItemArtifact.model_construct(
+                item_key=item_key,
+                target_key=target_key,
+                item_type="scientific",
+                stem=stem,
+                citation_ids=citation_ids,
+                scientific_answer_spec=scientific_answer_spec,
+                reference_answer=raw_item.get("reference_answer", ""),
+                rubric=rubric if rubric else None,
+            )
+        else:
+            return None
+        # Validate immutable fields — if they are invalid, the item cannot
+        # be repaired by specialized repair (which only changes mutable
+        # fields). This is a stable failure.
+        _validate_recovered_item_immutable_contract(placeholder)
+        return (placeholder, errors)
+    except (ValueError, ValidationError):
+        # Immutable contract violation — cannot recover. Re-raise so the
+        # caller treats this as a stable failure.
+        raise
+    except Exception:
+        return None
+
+
+def _validate_recovered_set_invariants(artifact: PracticeSetArtifact) -> None:
+    """Validate Set-level invariants on a PracticeSetArtifact constructed via
+    model_construct (which bypasses Pydantic validators). This checks the
+    same invariants as PracticeSetArtifact._consistency but without
+    re-running item-level _consistency (which would reject placeholder
+    items that intentionally carry broken references).
+
+    Raises ValueError if any Set-level invariant is violated.
+    """
+    keys = [item.item_key for item in artifact.items]
+    if len(keys) != len(set(keys)):
+        raise ValueError("duplicate item_key")
+    specialized = [item for item in artifact.items if item.item_type in {"coding", "scientific"}]
+    if len(specialized) > 1:
+        raise ValueError("at most one specialized (coding or scientific) item per set")
+    if len(artifact.items) >= 2:
+        types = {item.item_type for item in artifact.items}
+        general_types = types & {"single_choice", "short_answer"}
+        if not general_types:
+            raise ValueError("sets with >=2 items must include at least one general item type (single_choice or short_answer)")
+
+
+def _validate_recovered_item_immutable_contract(item: PracticeItemArtifact) -> None:
+    """Validate that a placeholder item's IMMUTABLE fields satisfy the
+    contract, even though the item was constructed via model_construct
+    (which bypasses Pydantic validators).
+
+    Mutable fields (reference_solution, starter_code for coding;
+    scientific_answer_spec, reference_answer for scientific) are allowed
+    to be broken — they will be caught by behavioral validation
+    (validate_coding_items / validate_scientific_items) and repaired.
+
+    Immutable fields that are invalid here CANNOT be repaired by
+    specialized repair (which only changes mutable fields), so they
+    must cause a stable failure immediately.
+
+    Raises ValueError with a stable code if any immutable field is invalid.
+    """
+    if item.item_type == "coding":
+        # language is immutable — repair cannot change it
+        if item.language is None:
+            raise ValueError("coding requires a language")
+        # hidden_tests count is immutable — repair cannot add/remove tests
+        hidden = item.hidden_tests or []
+        if not (3 <= len(hidden) <= 20):
+            raise ValueError("coding requires 3-20 hidden tests")
+        # public_examples count is immutable
+        pub = item.public_examples or []
+        if len(pub) > 3:
+            raise ValueError("coding allows at most 3 public examples")
+        # hidden tests must not be public
+        if any(test.is_public for test in hidden):
+            raise ValueError("hidden tests must not be public")
+        # test input uniqueness (across public + hidden)
+        all_cases = list(pub) + list(hidden)
+        inputs = [case.input for case in all_cases]
+        if len(inputs) != len(set(inputs)):
+            raise ValueError("coding test inputs must be unique")
+    elif item.item_type == "scientific":
+        # scientific_answer_spec is MUTABLE — specialized repair can
+        # replace it via ScientificReferenceRepairArtifact. So spec=None
+        # is allowed here; validate_scientific_items will flag it as a
+        # failure and trigger repair.
+        # rubric is immutable — repair cannot change it
+        rubric = item.rubric or []
+        if not (1 <= len(rubric) <= 5):
+            raise ValueError("scientific requires 1-5 rubric criteria")
+        keys = [criterion.criterion_key for criterion in rubric]
+        if len(keys) != len(set(keys)):
+            raise ValueError("duplicate criterion_key")
+        if sum(criterion.weight for criterion in rubric) != 100:
+            raise ValueError("rubric weights must sum to 100")
+
+
+def _structure_error_code(exc: ValidationError | ValueError) -> str:
+    """Map a structure-validation failure to a Spec 005 §8 stable code instead
+    of the generic ``invalid_practice_artifact`` (Codex review Medium)."""
+    if isinstance(exc, ValidationError):
+        return "practice_artifact_schema_invalid"
+    message = str(exc)
+    if "citation" in message or message == "unknown_citation":
+        return "practice_citation_invalid"
+    if "formula" in message:
+        return "practice_formula_invalid"
+    if "duplicate" in message:
+        return "practice_duplicate"
+    return "practice_artifact_schema_invalid"
+
+
+# ---------------------------------------------------------------------------
+# Codex review High (Slice 5 Smoke Correction 002 round 5): bounded, safe
+# metadata for the recovered-placeholder log. Never log the raw exception body.
+# ---------------------------------------------------------------------------
+
+# Upper bound on how many per-error diagnostics are enumerated in the log. Any
+# further errors are reflected only via validation_error_count + truncated=True.
+_RECOVERY_LOG_MAX_ENTRIES = 8
+
+# Artifact field names that are safe to name in a log (structural identities and
+# public contract field names — never values). Anything else maps to
+# ``unknown_field``.
+_RECOVERY_SAFE_FIELDS = frozenset({
+    "item_key", "target_key", "item_type", "stem", "citation_ids",
+    "options", "option_key", "rubric", "criterion_key", "reference_answer",
+    "language", "starter_code", "input_description", "output_description",
+    "constraints", "public_examples", "hidden_tests", "reference_solution",
+    "scientific_answer_spec", "normalized_answer", "tolerance", "unit",
+    "equivalence_rule", "needs_remote_verification", "verification_expression",
+    "weight", "comparator", "is_correct", "rationale", "description", "input",
+    "expected_output",
+})
+
+# Pydantic error ``type`` values safe to name in a log. Unknown types collapse
+# to ``validation_error`` so provider-driven or version-specific type strings
+# can never reach the log.
+_RECOVERY_SAFE_ERROR_TYPES = frozenset({
+    "missing", "extra_forbidden", "extra_forbidden_class", "string_too_short",
+    "string_too_long", "too_short", "too_long", "int_parsing", "int_type",
+    "float_parsing", "float_type", "literal_error", "literal_type",
+    "value_error", "assertion_error", "greater_than_equal", "less_than_equal",
+    "greater_than", "less_than", "multiple_of", "pattern_mismatch", "bool_parsing",
+    "bool_type", "list_type", "dict_type", "model_type", "string_type",
+    "enum", "uuid_type", "uuid_parse",
+})
+
+
+def _safe_recovery_diagnostics(exc: ValidationError | ValueError) -> dict[str, Any]:
+    """Build bounded, allow-listed metadata for the recovered-placeholder log.
+
+    Returns only ``validation_error_count`` (the total number of errors), a
+    ``diagnostics`` list (capped at ``_RECOVERY_LOG_MAX_ENTRIES``) of
+    ``{"field", "category"}`` pairs whose values are drawn from fixed
+    allow-lists, and a ``truncated`` flag. The raw exception body, provider
+    field values, stems, code, test content, compiler stderr, absolute paths
+    and full structured_errors list are never included.
+
+    - ``ValidationError``: each error contributes an allow-listed field name
+      (first loc segment in the allow-list, else ``unknown_field``) and an
+      allow-listed Pydantic ``type`` (else ``validation_error``). The message
+      body is never read.
+    - ``ValueError``: a single entry whose category is the stable code from
+      ``_structure_error_code`` (a fixed code, never the raw message).
+    """
+    entries: list[dict[str, str]] = []
+    if isinstance(exc, ValidationError):
+        errors = exc.errors()
+        total = len(errors)
+        for issue in errors[:_RECOVERY_LOG_MAX_ENTRIES]:
+            field = "unknown_field"
+            for part in issue.get("loc", ()):
+                name = str(part)
+                if name in _RECOVERY_SAFE_FIELDS:
+                    field = name
+                    break
+            etype = str(issue.get("type") or "validation_error")
+            category = etype if etype in _RECOVERY_SAFE_ERROR_TYPES else "validation_error"
+            entries.append({"field": field, "category": category})
+    else:
+        total = 1
+        entries.append({"field": "unknown_field", "category": _structure_error_code(exc)})
+    return {
+        "validation_error_count": total,
+        "diagnostics": entries,
+        "truncated": total > len(entries),
+    }
+
+
+def _merge_novelty_repair(
+    original: PracticeItemArtifact,
+    repaired: PracticeItemArtifact,
+) -> PracticeItemArtifact:
+    """Merge a novelty (stem) repair onto the original item (Codex review Medium).
+
+    The stem and type-specific question content are re-authored; identity,
+    citations, evidence and — for specialized items — the private test suite
+    (hidden_tests/weights/comparators) remain immutable. The subsequent
+    specialized-reference validation re-checks any re-authored reference against
+    the immutable tests.
+    """
+    base = original.model_dump(mode="json")
+    new = repaired.model_dump(mode="json")
+    base["stem"] = new["stem"]
+    if original.item_type == "single_choice":
+        base["options"] = new["options"]
+    elif original.item_type == "short_answer":
+        base["rubric"] = new["rubric"]
+        base["reference_answer"] = new["reference_answer"]
+    elif original.item_type == "coding":
+        base["reference_solution"] = new["reference_solution"]
+        base["starter_code"] = new["starter_code"]
+        if new.get("input_description") is not None:
+            base["input_description"] = new["input_description"]
+        if new.get("output_description") is not None:
+            base["output_description"] = new["output_description"]
+        # hidden_tests / weights / comparators IMMUTABLE
+    elif original.item_type == "scientific":
+        base["scientific_answer_spec"] = new["scientific_answer_spec"]
+        base["reference_answer"] = new["reference_answer"]
+        # rubric IMMUTABLE
+    return PracticeItemArtifact.model_validate(base)
 
 
 # ---------------------------------------------------------------------------
 # Coding reference validation via MCP (Spec 004 §6.2)
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Correction 002 §B: two-phase validation error classification
+# ---------------------------------------------------------------------------
+
+def _classify_validation_error(exc: ValidationError | ValueError) -> str:
+    """Classify a validation error as 'set_level', 'specialized_item_level',
+    or 'general_item_level' (Correction 002 §B).
+
+    Set-level: item count, target coverage, duplicate item_key, cross-Item
+    constraints, citation ledger, max specialized items.
+
+    Specialized-item-level: coding/scientific field, canonical source,
+    reference/starter contract.
+
+    General-item-level: single-choice/short-answer schema.
+
+    This classification determines the repair path:
+    - set_level -> whole-Set structure repair
+    - specialized_item_level -> minimal single-item repair (DTO)
+    - general_item_level -> whole-Set structure repair (general items
+      don't have a specialized repair path)
+    """
+    if isinstance(exc, ValueError):
+        message = str(exc)
+        # Specialized item errors
+        if any(kw in message for kw in (
+            "coding requires", "java coding", "cpp coding", "python coding",
+            "coding must not", "starter_code must not",
+            "scientific requires", "scientific must not",
+            "scientific_answer_spec",
+        )):
+            return "specialized_item_level"
+        # Set-level errors
+        if any(kw in message for kw in (
+            "duplicate item_key", "at most one specialized",
+            "must include at least one general",
+        )):
+            return "set_level"
+        # Default: treat as general item level -> whole-Set repair
+        return "general_item_level"
+
+    # Pydantic ValidationError: inspect error locations
+    for error in exc.errors()[:12]:
+        loc = ".".join(str(part) for part in error.get("loc", ()))
+        msg = str(error.get("msg") or "")
+        # Specialized item field errors
+        if any(kw in loc for kw in (
+            "language", "reference_solution", "hidden_tests",
+            "starter_code", "scientific_answer_spec",
+        )) or any(kw in msg for kw in (
+            "coding requires", "scientific requires",
+            "java coding", "cpp coding", "python coding",
+        )):
+            return "specialized_item_level"
+        # Set-level errors
+        if any(kw in loc for kw in ("items",)) and any(kw in msg for kw in (
+            "duplicate", "at most one", "must include",
+        )):
+            return "set_level"
+
+    return "general_item_level"
+
+
+# ---------------------------------------------------------------------------
+# Correction 002 §C: safe position summary for Java/C++ repair
+# ---------------------------------------------------------------------------
+
+def _build_safe_position_summary(
+    language: str,
+    validation_result: "CodingReferenceValidationResult",
+) -> str:
+    """Build a bounded, desensitized position summary for coding repair
+    (Correction 002 §C).
+
+    Contains only:
+    - Stable failure category (compile, runtime, test mismatch, etc.)
+    - Language and harness version
+    - Bounded position info: stage, return code, error category, limited
+      line/column info (max 3 lines, no absolute paths, no hidden test
+      content, no full compiler stderr)
+
+    Does NOT contain:
+    - Temporary absolute paths
+    - Hidden test content
+    - Full compiler stderr
+    - Provider raw observation
+    """
+    categories = validation_result.error_categories
+    passed = validation_result.tests_passed
+    total = validation_result.tests_total
+
+    if validation_result.infrastructure_failure:
+        return f"language={language} stage=infrastructure categories={categories}"
+
+    parts = [f"language={language}"]
+    if categories:
+        parts.append(f"categories={categories}")
+    parts.append(f"passed={passed}/{total}")
+
+    return " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Correction 002 §D: stable error codes for repair artifact invalid vs
+# repair-then-revalidate failure
+# ---------------------------------------------------------------------------
+
+# Stable code for when the minimal repair DTO itself is malformed
+CODING_REPAIR_ARTIFACT_INVALID = "coding_repair_artifact_invalid"
+SCIENTIFIC_REPAIR_ARTIFCAT_INVALID = "scientific_repair_artifact_invalid"
+
+# Stable code for when repair artifact is valid but re-validation fails
+CODING_REPAIR_REVALIDATION_FAILED = "coding_repair_revalidation_failed"
+SCIENTIFIC_REPAIR_REVALIDATION_FAILED = "scientific_repair_revalidation_failed"
+
+
+def _coding_reference_stable_code(raw_categories: str) -> tuple[str, str]:
+    """Map raw reference-execution categories to a Spec 005 §8 stable error code
+    plus a bounded repair category. The stable code is what reaches the Job/UI;
+    the repair category is the only failure detail given to the provider."""
+    cats = (raw_categories or "").lower()
+    if "compile" in cats:
+        return ("coding_reference_compile_failed", "compile_error")
+    if "timeout" in cats or "timed_out" in cats:
+        return ("coding_reference_test_failed", "timeout")
+    if "output" in cats or "output_limit" in cats:
+        return ("coding_reference_test_failed", "output_limit")
+    if "runtime" in cats:
+        return ("coding_reference_test_failed", "runtime_error")
+    # test_mismatch, mismatch, reference_failed_tests, harness_output_parse_error
+    return ("coding_reference_test_failed", "test_mismatch")
+
+
+def _assert_repair_immutability(
+    original: PracticeItemArtifact,
+    repaired: PracticeItemArtifact,
+) -> None:
+    """Verify that a specialized repair did not alter any immutable field
+    (Codex review High 1 / Spec 005 §6.3).
+
+    The repair prompt instructs the provider to preserve identity and the
+    public contract, but a malicious or confused provider could return
+    easier hidden_tests, a different stem, or altered citations. This
+    function detects such drift and raises so the repair is rejected
+    rather than silently accepted.
+
+    Immutable for ALL item types: stem, citation_ids.
+    Immutable for coding: hidden_tests, public_examples, constraints,
+        input_description, output_description.
+    Immutable for scientific: rubric.
+    """
+    if repaired.stem != original.stem:
+        raise ValueError("specialized repair changed immutable field: stem")
+    if sorted(repaired.citation_ids) != sorted(original.citation_ids):
+        raise ValueError("specialized repair changed immutable field: citation_ids")
+    if original.item_type == "coding":
+        orig_tests = [t.model_dump() for t in (original.hidden_tests or [])]
+        new_tests = [t.model_dump() for t in (repaired.hidden_tests or [])]
+        if orig_tests != new_tests:
+            raise ValueError("specialized repair changed immutable field: hidden_tests")
+        orig_pub = [t.model_dump() for t in (original.public_examples or [])]
+        new_pub = [t.model_dump() for t in (repaired.public_examples or [])]
+        if orig_pub != new_pub:
+            raise ValueError("specialized repair changed immutable field: public_examples")
+        if sorted(repaired.constraints or []) != sorted(original.constraints or []):
+            raise ValueError("specialized repair changed immutable field: constraints")
+        if (repaired.input_description or "") != (original.input_description or ""):
+            raise ValueError("specialized repair changed immutable field: input_description")
+        if (repaired.output_description or "") != (original.output_description or ""):
+            raise ValueError("specialized repair changed immutable field: output_description")
+    elif original.item_type == "scientific":
+        orig_rubric = [c.model_dump() for c in (original.rubric or [])]
+        new_rubric = [c.model_dump() for c in (repaired.rubric or [])]
+        if orig_rubric != new_rubric:
+            raise ValueError("specialized repair changed immutable field: rubric")
+
+
+def _merge_specialized_repair(
+    original: PracticeItemArtifact,
+    repaired: PracticeItemArtifact,
+    category: str,
+) -> PracticeItemArtifact:
+    """Merge a specialized repair onto the original item, changing ONLY the
+    reference field that failed (Codex review High 1 / Spec 005 §6.3).
+
+    Immutable (kept from ``original``): item_key, target_key, item_type,
+    language, stem, citation_ids, hidden_tests/weights/comparators,
+    public_examples, constraints, io descriptions, and (scientific) rubric.
+    The provider cannot alter the private test suite, so it cannot make a weak
+    reference pass by substituting easier tests.
+    """
+    base = original.model_dump(mode="json")
+    if repaired.item_type == "coding":
+        if category == "starter_reveals_solution":
+            base["starter_code"] = repaired.starter_code
+        else:
+            base["reference_solution"] = repaired.reference_solution
+    elif repaired.item_type == "scientific":
+        base["scientific_answer_spec"] = repaired.scientific_answer_spec.model_dump(mode="json")
+        base["reference_answer"] = repaired.reference_answer
+    return PracticeItemArtifact.model_validate(base)
+
+
+def _merge_minimal_coding_repair(
+    original: PracticeItemArtifact,
+    repair: "CodingReferenceRepairArtifact",
+) -> PracticeItemArtifact:
+    """Merge a minimal coding repair DTO onto the original item
+    (Correction 002 §A).
+
+    Only ``reference_solution`` and ``starter_code`` come from the repair DTO.
+    ALL other fields (hidden_tests, stem, citation_ids, language, public_examples,
+    constraints, input_description, output_description, item_key, target_key,
+    item_type, rubric, options, scientific_answer_spec) are copied from the
+    original. This is the strictest possible merge: the provider CANNOT
+    influence any immutable field.
+    """
+    base = original.model_dump(mode="json")
+    base["reference_solution"] = repair.reference_solution
+    if repair.starter_code is not None:
+        base["starter_code"] = repair.starter_code
+    return PracticeItemArtifact.model_validate(base)
+
+
+def _merge_minimal_scientific_repair(
+    original: PracticeItemArtifact,
+    repair: "ScientificReferenceRepairArtifact",
+) -> PracticeItemArtifact:
+    """Merge a minimal scientific repair DTO onto the original item
+    (Correction 002 §A).
+
+    Only ``scientific_answer_spec`` and ``reference_answer`` come from the
+    repair DTO. ALL other fields (rubric, stem, citation_ids, item_key,
+    target_key, item_type, language, hidden_tests, etc.) are copied from
+    the original.
+    """
+    base = original.model_dump(mode="json")
+    base["scientific_answer_spec"] = repair.scientific_answer_spec.model_dump(mode="json")
+    base["reference_answer"] = repair.reference_answer
+    return PracticeItemArtifact.model_validate(base)
 
 @dataclass(frozen=True)
 class CodingReferenceValidationResult:
@@ -844,6 +1802,34 @@ def _build_coding_harness(source_code: str, tests: list[dict[str, Any]], languag
     raise ValueError("unsupported_code_language")
 
 
+def _build_coding_harness_for_version(
+    source_code: str,
+    tests: list[dict[str, Any]],
+    language: str,
+    harness_version: str,
+) -> str:
+    """Versioned harness builder (ADR 007 §3.1 / Codex review High 2).
+
+    Dispatches to the correct harness implementation based on the pinned
+    ``harness_version``. Currently v1 and v2 share the same underlying
+    ``_build_coding_harness`` (the execution logic is identical; the version
+    string differentiates the contract for future divergence). This explicit
+    dispatch ensures that a future v2-specific harness does not silently
+    fall through to the v1 implementation.
+
+    Unknown versions raise ``artifact_contract_unsupported`` rather than
+    defaulting to any implementation.
+    """
+    if harness_version == HARNESS_V1:
+        return _build_coding_harness(source_code, tests, language)
+    if harness_version == HARNESS_V2:
+        # v2 currently delegates to the same harness; the dispatch point is
+        # explicit so a future v2-specific implementation can be inserted here
+        # without touching any other code.
+        return _build_coding_harness(source_code, tests, language)
+    raise ValueError("artifact_contract_unsupported")
+
+
 def _validate_coding_reference_via_mcp(
     reference_solution: str,
     hidden_tests: list[dict[str, Any]],
@@ -851,6 +1837,7 @@ def _validate_coding_reference_via_mcp(
     settings: Settings,
     *,
     request_id_prefix: str = "ref-validate",
+    harness_version: str = HARNESS_V1,
 ) -> CodingReferenceValidationResult:
     """Validate a coding item's reference solution against its hidden tests via MCP.
 
@@ -874,7 +1861,7 @@ def _validate_coding_reference_via_mcp(
     # Build a test harness that runs all hidden tests against the
     # reference solution in a single execution.
     # The harness outputs JSON: {"passed": N, "total": T, "errors": [...]}
-    harness = _build_coding_harness(reference_solution, hidden_tests, language)
+    harness = _build_coding_harness_for_version(reference_solution, hidden_tests, language, harness_version)
 
     request_id = f"{request_id_prefix}-{hashlib.sha256(harness.encode()).hexdigest()[:12]}"
 
@@ -983,7 +1970,14 @@ def execute_coding_grading(
     - hidden_tests: list of {input, expected_output, comparator, weight}
     - reference_solution: the reference solution (used for validation only)
     - comparator: default comparator
+    - harness_version: the versioned contract the grader must dispatch to
     """
+    # Slice 5 (ADR 007 §3.1 / Codex review High 2): explicit version dispatch.
+    # The harness_version in answer_spec pins the canonical wrapper the grader
+    # must dispatch to. Unknown versions fail stably rather than silently
+    # falling through to the current implementation.
+    harness_version = answer_spec.get("harness_version", HARNESS_V1)
+
     tests = list(answer_spec.get("public_tests", [])) + list(answer_spec.get("hidden_tests", []))
     if not tests:
         # No tests — cannot grade. This is a configuration error, not
@@ -1002,7 +1996,7 @@ def execute_coding_grading(
     language = answer_spec.get("language", "python")
     total_weight = sum(test.get("weight", 1) for test in tests)
     total_count = len(tests)
-    harness = _build_coding_harness(source_code, tests, language)
+    harness = _build_coding_harness_for_version(source_code, tests, language, harness_version)
 
     request_id = f"{request_id_prefix}-{hashlib.sha256(harness.encode()).hexdigest()[:12]}"
 
@@ -1174,6 +2168,7 @@ def _build_coding_feedback_prompt(
 
 
 def execute_grading(db: Session, settings: Settings, job: PracticeJob, *, worker_id: str, lease_lost=None) -> None:
+    grading_started = time.monotonic()
     attempt = db.get(PracticeAttempt, job.practice_attempt_id)
     if attempt is None or attempt.workspace_id != job.workspace_id or attempt.practice_job_id != job.id:
         raise ValueError("practice_canceled")
@@ -1206,7 +2201,7 @@ def execute_grading(db: Session, settings: Settings, job: PracticeJob, *, worker
         ))
         if auth is None or auth.used_calls >= auth.max_calls:
             raise ValueError("code_execution_not_authorized")
-        _check_active(db, job, worker_id, started=0.0, wall_limit=0, lease_lost=lease_lost, check_wall=False)
+        _check_active(db, job, worker_id, started=grading_started, wall_limit=settings.practice_grading_max_wall_seconds, lease_lost=lease_lost)
         auth.used_calls += 1
         db.flush()
 
@@ -1330,7 +2325,11 @@ def execute_grading(db: Session, settings: Settings, job: PracticeJob, *, worker
                 })
 
         # Final authoritative re-check
-        _assert_grading_authority(db, job, attempt, item, worker_id, lease_lost)
+        _assert_grading_authority(
+            db, job, attempt, item, worker_id, lease_lost,
+            started=grading_started,
+            wall_limit=settings.practice_grading_max_wall_seconds,
+        )
 
         record = PracticeFeedback(
             practice_attempt_id=attempt.id,
@@ -1379,6 +2378,7 @@ def execute_grading(db: Session, settings: Settings, job: PracticeJob, *, worker
 
     science_verification: dict[str, Any] | None = None
     science_run: AgentRun | None = None
+    science_status: str | None = None  # local_decided | remote_verified | unauthorized | unavailable | insufficient
     if item.item_type == "scientific":
         science_run = AgentRun(practice_job_id=job.id, workspace_id=job.workspace_id, role="scientific_solution_grader", attempt_number=job.attempt_count, status="running")
         db.add(science_run)
@@ -1390,6 +2390,7 @@ def execute_grading(db: Session, settings: Settings, job: PracticeJob, *, worker
         equivalent: bool | None = None
         if rule == "exact":
             equivalent = submitted.casefold() == expected.casefold()
+            science_status = "local_decided"
         elif rule == "numeric_tolerance":
             try:
                 unit = str(spec.get("unit") or "").strip()
@@ -1397,14 +2398,18 @@ def execute_grading(db: Session, settings: Settings, job: PracticeJob, *, worker
                 equivalent = abs(float(submitted_number) - float(expected)) <= float(spec.get("tolerance") or 0)
             except ValueError:
                 equivalent = False
+            science_status = "local_decided"
         else:
+            # symbolic / remote-required verification (Spec 005 §10.2)
             auth = db.scalar(select(JobToolAuthorization).where(
                 JobToolAuthorization.practice_job_id == job.id,
                 JobToolAuthorization.capability_id == "science_computation",
             ))
-            if auth is not None and auth.used_calls < auth.max_calls:
+            if auth is None or auth.used_calls >= auth.max_calls:
+                science_status = "unauthorized"
+            else:
                 from learn_platform_api.services.science_tool_service import execute_science_verification
-                _check_active(db, job, worker_id, started=0.0, wall_limit=0, lease_lost=lease_lost, check_wall=False)
+                _check_active(db, job, worker_id, started=grading_started, wall_limit=settings.practice_grading_max_wall_seconds, lease_lost=lease_lost)
                 call_started = time.perf_counter()
                 auth.used_calls += 1
                 science_run.step_count = 1
@@ -1415,17 +2420,82 @@ def execute_grading(db: Session, settings: Settings, job: PracticeJob, *, worker
                     settings=settings,
                     expected_schema_hash=auth.schema_hash_snapshot,
                 )
-                if result.success and isinstance(result.observation, dict):
-                    equivalent = result.observation.get("equivalent") if isinstance(result.observation.get("equivalent"), bool) else None
-                _tool_call(db, science_run, "VerifyScientificAttempt", 1, None, 1 if equivalent is not None else None, call_started, "succeeded" if equivalent is not None else "failed", None if equivalent is not None else (result.error_code or "unverified"))
+                if not result.success:
+                    _tool_call(db, science_run, "VerifyScientificAttempt", 1, None, None, call_started, "failed", result.error_code or "science_tool_unavailable")
+                    science_status = "unavailable"
+                else:
+                    observation = result.observation if isinstance(result.observation, dict) else {}
+                    equivalent = observation.get("equivalent") if isinstance(observation.get("equivalent"), bool) else None
+                    if equivalent is None:
+                        _tool_call(db, science_run, "VerifyScientificAttempt", 1, None, None, call_started, "failed", "insufficient_observation")
+                        science_status = "insufficient"
+                    else:
+                        _tool_call(db, science_run, "VerifyScientificAttempt", 1, None, 1, call_started)
+                        science_status = "remote_verified"
 
         science_verification = {
             "final_result_equivalent": equivalent,
             "expected_value": expected,
             "unit": spec.get("unit"),
             "equivalence_rule": rule,
+            "status": science_status,
             "note": "This checks only the final result. Grade the worked reasoning separately.",
         }
+
+        # Hard boundaries (Spec 005 §10.2 / ADR 007 §3.5) apply to v2 items only.
+        # v1 science items keep legacy grading (LLM rubric with the deterministic
+        # signal as bounded evidence, possibly None) so historical scores are not
+        # changed by the new boundary (ADR 007 §6 / "不改变旧分数").
+        if job.artifact_contract_version == ARTIFACT_CONTRACT_V2:
+            if science_status == "unavailable":
+                # Transient tool failure: fail the Job (delivery-retryable), no Feedback.
+                raise ValueError("science_tool_unavailable")
+            if science_status in {"unauthorized", "insufficient"}:
+                # No score, no learning projection; a limitation is the only feedback.
+                _assert_grading_authority(
+                    db, job, attempt, item, worker_id, lease_lost,
+                    started=grading_started,
+                    wall_limit=settings.practice_grading_max_wall_seconds,
+                )
+                if job.output_language == "zh-CN":
+                    limitation_text = (
+                        "未授权使用科学工具，无法验证该题最终结果，因此不能给出数值分数。"
+                        if science_status == "unauthorized"
+                        else "科学工具返回的结果不足以验证该题最终结果，因此不能给出数值分数。"
+                    )
+                else:
+                    limitation_text = (
+                        "Science tool not authorized: the final result could not be verified, so no numeric score is given."
+                        if science_status == "unauthorized"
+                        else "The science tool returned insufficient evidence to verify the final result, so no numeric score is given."
+                    )
+                ungradable_feedback = PracticeFeedback(
+                    practice_attempt_id=attempt.id, workspace_id=job.workspace_id,
+                    verdict="ungradable", score=None, criterion_results=None,
+                    feedback_blocks=[{
+                        "block_key": "verification_limitation", "type": "limitation",
+                        "text": limitation_text, "citation_ids": [], "option_key": None,
+                    }],
+                    is_ai_graded=0, created_at=now(),
+                )
+                db.add(ungradable_feedback)
+                db.flush()
+                science_run.status = "succeeded"
+                science_run.step_count = science_run.step_count or 1
+                science_run.completed_at = now()
+                attempt.status = "succeeded"
+                attempt.completed_at = now()
+                attempt.error_code = None
+                attempt.error_message = None
+                job.status = "succeeded"
+                job.input_tokens = None
+                job.output_tokens = None
+                job.lease_expires_at = None
+                job.worker_id = None
+                job.error_code = None
+                job.error_message = None
+                job.completed_at = now()
+                return
 
     # ------------------------------------------------------------------
     # Short answer grading path (existing logic)
@@ -1500,7 +2570,11 @@ def execute_grading(db: Session, settings: Settings, job: PracticeJob, *, worker
         _tool_call(db, run, "SubmitPracticeFeedback", ordinal, None, 1, submit_started, "succeeded")
 
     # Final authoritative re-check (owner + lease + scope + no prior feedback).
-    _assert_grading_authority(db, job, attempt, item, worker_id, lease_lost)
+    _assert_grading_authority(
+        db, job, attempt, item, worker_id, lease_lost,
+        started=grading_started,
+        wall_limit=settings.practice_grading_max_wall_seconds,
+    )
     reference_answer = str(answer_spec.get("reference_answer", "")).strip()
     feedback_blocks = [{**block.model_dump(), "option_key": None} for block in feedback.blocks]
     if reference_answer:

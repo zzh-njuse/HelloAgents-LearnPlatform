@@ -165,7 +165,7 @@ def _artifact(types=("single", "short"), citation="e1"):
 def probe_gen_mixed_types():
     db = fresh_db(); settings = get_settings()
     ws, course, cversion, lesson, lversion, chunk, document, version = _reader(db)
-    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_provider", _seq([({"queries": ["q"]}, {"input_tokens": 2, "output_tokens": 2}), (_artifact(), {"input_tokens": 10, "output_tokens": 20})]))):
+    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_practice_provider", _seq([({"queries": ["q"]}, {"input_tokens": 2, "output_tokens": 2}), (_artifact(), {"input_tokens": 10, "output_tokens": 20})]))):
         job = _gen_job(db, settings, ws, course, cversion, lesson, lversion)
         _run_gen(db, settings, job)
     sets = list(db.scalars(select(PracticeSet).where(PracticeSet.workspace_id == ws.id)))
@@ -180,7 +180,7 @@ def probe_gen_mixed_types():
 def probe_gen_single():
     db = fresh_db(); settings = get_settings()
     ws, course, cversion, lesson, lversion, chunk, document, version = _reader(db)
-    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_provider", _seq([({"queries": ["q"]}, {"input_tokens": 2, "output_tokens": 2}), (_artifact(types=("single",)), {"input_tokens": 10, "output_tokens": 20})]))):
+    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_practice_provider", _seq([({"queries": ["q"]}, {"input_tokens": 2, "output_tokens": 2}), (_artifact(types=("single",)), {"input_tokens": 10, "output_tokens": 20})]))):
         job = _gen_job(db, settings, ws, course, cversion, lesson, lversion, item_count=1)
         _run_gen(db, settings, job)
     expect(db.scalar(select(func_count(PracticeSet)).where(PracticeSet.workspace_id == ws.id)) == 1, "missing_commit")
@@ -190,7 +190,7 @@ def probe_gen_single():
 def probe_gen_english():
     db = fresh_db(); settings = get_settings()
     ws, course, cversion, lesson, lversion, chunk, document, version = _reader(db)
-    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_provider", _seq([({"queries": ["q"]}, {"input_tokens": 2, "output_tokens": 2}), (_artifact(), {"input_tokens": 10, "output_tokens": 20})]))):
+    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_practice_provider", _seq([({"queries": ["q"]}, {"input_tokens": 2, "output_tokens": 2}), (_artifact(), {"input_tokens": 10, "output_tokens": 20})]))):
         job = _gen_job(db, settings, ws, course, cversion, lesson, lversion, language="en")
         _run_gen(db, settings, job)
     practice_set = db.scalar(select(PracticeSet).where(PracticeSet.workspace_id == ws.id))
@@ -201,7 +201,7 @@ def probe_gen_english():
 def _gen_no_commit(provider_items, *, retrieve=None, item_count=1):
     db = fresh_db(); settings = get_settings()
     ws, course, cversion, lesson, lversion, chunk, document, version = _reader(db)
-    targets = [(practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "call_provider", _seq(provider_items))]
+    targets = [(practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "call_practice_provider", _seq(provider_items))]
     if retrieve is None:
         targets.append((practice_generation, "retrieve", _evidence(chunk, document, version)))
     else:
@@ -238,7 +238,7 @@ def probe_gen_budget():
 def probe_gen_cancel():
     db = fresh_db(); settings = get_settings()
     ws, course, cversion, lesson, lversion, chunk, document, version = _reader(db)
-    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_provider", _seq([({"queries": ["q"]}, {"input_tokens": 1, "output_tokens": 1})]))):
+    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_practice_provider", _seq([({"queries": ["q"]}, {"input_tokens": 1, "output_tokens": 1})]))):
         job = _gen_job(db, settings, ws, course, cversion, lesson, lversion, item_count=1)
         job.status = "cancel_requested"; job.attempt_count = 1; job.worker_id = EVAL_WORKER_ID; job.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=300); db.commit()
         try:
@@ -279,7 +279,7 @@ def probe_gen_multi_search_distinct_keys():
         {"target_key": "objective_1", "item_key": "q1", "item_type": "single_choice", "stem": "Which halves?", "citation_ids": ["e1"], "options": [{"option_key": "a", "text": "Binary search", "is_correct": True, "rationale": "r", "citation_ids": ["e1"]}, {"option_key": "b", "text": "Linear scan", "is_correct": False, "rationale": "r", "citation_ids": ["e2"]}]},
     ]}
     provider = iter([({"queries": ["halves", "linear scan"]}, {"input_tokens": 2, "output_tokens": 2}), (artifact, {"input_tokens": 10, "output_tokens": 20})])
-    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", fake_retrieve), (practice_generation, "call_provider", lambda *_a, **_k: next(provider))):
+    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", fake_retrieve), (practice_generation, "call_practice_provider", lambda *_a, **_k: next(provider))):
         job = _gen_job(db, settings, ws, course, cversion, lesson, lversion, item_count=1)
         _run_gen(db, settings, job)
     citations = {c.citation_key: c.document_chunk_id for c in db.scalars(select(PracticeItemCitation).where(PracticeItemCitation.workspace_id == ws.id))}
@@ -292,7 +292,7 @@ def probe_gen_plan_call_counted():
     """The search-plan provider call must be recorded as a counted tool call/step."""
     db = fresh_db(); settings = get_settings()
     ws, course, cversion, lesson, lversion, chunk, document, version = _reader(db)
-    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_provider", _seq([({"queries": ["q"]}, {"input_tokens": 2, "output_tokens": 2}), (_artifact(), {"input_tokens": 10, "output_tokens": 20})]))):
+    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_practice_provider", _seq([({"queries": ["q"]}, {"input_tokens": 2, "output_tokens": 2}), (_artifact(), {"input_tokens": 10, "output_tokens": 20})]))):
         job = _gen_job(db, settings, ws, course, cversion, lesson, lversion, item_count=2)
         _run_gen(db, settings, job)
     run = db.scalar(select(AgentRun).where(AgentRun.practice_job_id == job.id))
@@ -302,9 +302,9 @@ def probe_gen_plan_call_counted():
     # Only PracticeEvidenceSearch and SubmitPracticeSet are product tool names.
     expect("PlanPracticeSearch" not in tool_names, "plan_call_not_counted", f"plan must not be a ToolCall: {tool_names}")
     expect(set(tool_names) <= {"PracticeEvidenceSearch", "SubmitPracticeSet"}, "plan_call_not_counted", f"non-whitelist tool names: {tool_names}")
-    # plan(provider call) + 1 search + 1 submit(provider call) = step_count 3; always <= 6.
+    # plan(provider call) + 1 search + 1 submit(provider call) = step_count 3; always <= 12.
     expect(run.step_count == 3, "plan_call_not_counted", f"step_count={run.step_count}, expected 3 for plan+1search+submit")
-    expect(run.step_count <= settings.practice_generation_max_steps, "plan_call_not_counted", "step budget exceeded")
+    expect(run.step_count <= settings.practice_generation_max_attempt_steps, "plan_call_not_counted", "step budget exceeded")
 
 
 def probe_gen_final_authority_mutation():
@@ -321,7 +321,7 @@ def probe_gen_final_authority_mutation():
         document.lifecycle_status = "deleted"; db.flush()
         return value
 
-    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_provider", provider_with_midflight_degrade)):
+    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_practice_provider", provider_with_midflight_degrade)):
         job = _gen_job(db, settings, ws, course, cversion, lesson, lversion, item_count=2)
         job.status = "running"; job.attempt_count = 1; job.worker_id = EVAL_WORKER_ID; job.lease_expires_at = datetime.now(timezone.utc) + timedelta(seconds=300); db.commit()
         try:
@@ -532,7 +532,7 @@ def probe_language_consistency():
 
 
 class _GraderRequest:
-    item_type = "short_answer"; stem = "s"; reference_answer = "r"; rubric = (); evidence = (); answer = "ans"; output_language = "en"
+    item_type = "short_answer"; stem = "s"; reference_answer = "r"; rubric = (); evidence = (); answer = "ans"; output_language = "en"; deterministic_verification = None
 
 
 def probe_privacy_trace_clean():
@@ -561,7 +561,7 @@ def probe_privacy_trace_clean():
 def probe_obs_generation():
     db = fresh_db(); settings = get_settings()
     ws, course, cversion, lesson, lversion, chunk, document, version = _reader(db)
-    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_provider", _seq([({"queries": ["q"]}, {"input_tokens": 2, "output_tokens": 2}), (_artifact(), {"input_tokens": 10, "output_tokens": 20})]))):
+    with patched((practice, "enqueue_practice_job", lambda *_a: None), (practice_generation, "retrieve", _evidence(chunk, document, version)), (practice_generation, "call_practice_provider", _seq([({"queries": ["q"]}, {"input_tokens": 2, "output_tokens": 2}), (_artifact(), {"input_tokens": 10, "output_tokens": 20})]))):
         job = _gen_job(db, settings, ws, course, cversion, lesson, lversion)
         _run_gen(db, settings, job)
     items = list(db.scalars(select(PracticeItem).where(PracticeItem.workspace_id == ws.id)))
@@ -702,7 +702,7 @@ def probe_lp_api_no_leak():
     mems = list_memories(db, ws.id)
     import json
     blob = json.dumps({"state": state, "memories": mems}, ensure_ascii=False, default=str)
-    for forbidden in ("projection_score", "answer_spec", "rubric", "feedback_blocks", "correct_option_key", "display_text" if False else "prompt", "option_rationales"):
+    for forbidden in ("projection_score", "answer_spec", "rubric", "feedback_blocks", "correct_option_key", "prompt", "option_rationales"):
         expect(forbidden not in blob, "unexpected_commit", f"API leaked '{forbidden}'")
     return None
 

@@ -15,7 +15,15 @@ from learn_platform_api.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-RETRYABLE_CODES = {"provider_unavailable"}
+# Slice 5 (Spec 005 §7.1 / ADR 007 §3.6): delivery retry covers transient
+# provider/queue/MCP/lease faults only. Structural, reference, budget, cancel
+# and source-stale failures are NOT auto-retried.
+RETRYABLE_CODES = {
+    "provider_unavailable",
+    "queue_unavailable",
+    "code_execution_unavailable",
+    "science_tool_unavailable",
+}
 
 ERROR_MESSAGES = {
     "coding_item_not_supported_by_lesson": "当前课节缺少可执行学习目标或代码证据，无法生成合适的编程题。请选择自动选择或普通题。",
@@ -25,6 +33,31 @@ ERROR_MESSAGES = {
     "provider_unavailable": "练习模型服务暂不可用",
     "insufficient_evidence": "当前资料不足以生成练习",
     "invalid_practice_artifact": "练习结果未通过结构或引用校验",
+    # Slice 5 refined coding/science reference codes (Spec 005 §8).
+    "coding_contract_invalid": "编程题合同不合法，系统已拒绝发布；请重新生成",
+    "coding_reference_compile_failed": "模型生成的编程题参考实现无法编译，系统已拒绝发布；请重新生成",
+    "coding_reference_test_failed": "模型生成的编程题参考实现未通过后台测试，系统已拒绝发布；请重新生成",
+    "coding_starter_invalid": "编程题初始代码会泄露答案，系统已拒绝发布；请重新生成",
+    "scientific_answer_spec_invalid": "科学题答案规格不完整，系统已拒绝发布；请重新生成",
+    "scientific_spec_missing": "科学题缺少答案规格，系统已拒绝发布；请重新生成",
+    "scientific_reference_unverified": "科学题参考答案未通过验证，系统已拒绝发布；请重新生成",
+    # Transient infrastructure (delivery-retryable).
+    "code_execution_unavailable": "编程题后台执行服务暂时不可用，请稍后重试",
+    "science_tool_unavailable": "科学验证工具暂时不可用，请稍后重试",
+    "queue_unavailable": "练习队列暂时不可用",
+    # Slice 5 version authority (not retryable): re-generate to get a fresh Job.
+    "artifact_contract_unsupported": "该练习任务的 artifact 合同版本不受当前系统支持，请重新生成",
+    # Slice 5 staged structure codes (Spec 005 §8).
+    "practice_artifact_schema_invalid": "练习结果未通过结构校验，系统已拒绝发布；请重新生成",
+    "practice_citation_invalid": "练习结果引用校验失败，系统已拒绝发布；请重新生成",
+    "practice_formula_invalid": "练习结果公式校验失败，系统已拒绝发布；请重新生成",
+    "practice_duplicate": "练习结果与已有题目重复，系统已拒绝发布；请重新生成",
+    # Correction 002 §D: stable codes for repair artifact invalid vs re-validation failure
+    "coding_repair_artifact_invalid": "编程题修复结果格式不合法，系统已拒绝；请重新生成",
+    "scientific_repair_artifact_invalid": "科学题修复结果格式不合法，系统已拒绝；请重新生成",
+    "coding_repair_revalidation_failed": "编程题修复后参考实现仍未通过验证，系统已拒绝；请重新生成",
+    "scientific_repair_revalidation_failed": "科学题修复后参考答案仍未通过验证，系统已拒绝；请重新生成",
+    # Legacy aliases kept for any in-flight/older rows (still mapped, not retried).
     "coding_reference_validation_failed": "模型生成的编程题参考实现未通过后台测试，系统已拒绝发布；请重新生成",
     "coding_reference_validation_infrastructure_failure": "编程题后台验证服务暂时不可用，请稍后重试",
     "scientific_answer_verification_failed": "科学题参考答案未通过 Wolfram 验证，系统已拒绝发布；请重新生成",
@@ -35,7 +68,6 @@ ERROR_MESSAGES = {
     "grading_budget_exceeded": "评分达到运行预算，未提交结果",
     "practice_budget_exceeded": "练习生成达到受控预算",
     "practice_canceled": "练习任务已取消",
-    "queue_unavailable": "练习队列暂时不可用",
 }
 
 

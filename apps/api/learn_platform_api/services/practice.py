@@ -31,6 +31,7 @@ from learn_platform_api.db.models import (
     PracticeFeedback,
     PracticeItem,
     PracticeItemCitation,
+    PracticeItemTarget,
     PracticeJob,
     PracticeJobSource,
     PracticeSet,
@@ -40,6 +41,12 @@ from learn_platform_api.db.models import (
 from learn_platform_api.services.practice_generation import execute_generation, execute_grading
 from learn_platform_api.services.queue import enqueue_practice_job, enqueue_practice_set_deletion
 from learn_platform_api.settings import Settings
+from academic_companion.practice_agents import (
+    ARTIFACT_CONTRACT_V1,
+    ARTIFACT_CONTRACT_V2,
+    CURRENT_ARTIFACT_CONTRACT,
+    HARNESS_V2,
+)
 
 ACTIVE_JOB_STATUSES = {"queued", "running", "retry_wait", "cancel_requested"}
 GRADEABLE_STATES = {"grading", "retry_wait", "queue_failed", "failed", "cancel_requested", "canceled"}
@@ -72,6 +79,26 @@ def _now() -> datetime:
 
 def _hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _artifact_version_for_item(db: Session, item: PracticeItem) -> str:
+    """Snapshot the artifact contract version a grading Job must keep.
+
+    Per ADR 007 §3.1 the grader dispatches by the item's own harness version,
+    but the Job still pins the contract family at submission so retry/reconciler
+    cannot silently change it. Prefer the Set's pinned version; fall back to the
+    coding harness version; otherwise read as v1 (historical items).
+    """
+    practice_set = db.get(PracticeSet, item.practice_set_id)
+    if practice_set is not None:
+        pinned = (practice_set.generation_config or {}).get("artifact_contract_version")
+        if pinned:
+            return pinned
+    if item.item_type == "coding":
+        harness = (item.answer_spec or {}).get("harness_version")
+        if harness == HARNESS_V2:
+            return ARTIFACT_CONTRACT_V2
+    return ARTIFACT_CONTRACT_V1
 
 
 # --------------------------------------------------------------------------- #
@@ -147,7 +174,7 @@ def create_generation_job(db: Session, settings: Settings, workspace_id: str, co
         raise ValueError("source_snapshot_stale")
     output_language = payload.output_language or _lesson_language(db, lesson_id)
     legacy_request_hash = _hash(f"{course_version_id}|{lesson_version_id}|{payload.item_count}|{payload.difficulty}|{output_language}|{getattr(payload, 'item_type_mode', 'auto')}|{getattr(payload, 'code_languages', None)}")
-    request_hash = _hash(f"{course_version_id}|{lesson_version_id}|{payload.item_count}|{payload.difficulty}|{output_language}|{getattr(payload, 'item_type_mode', 'auto')}|{getattr(payload, 'code_languages', None)}|{getattr(payload, 'code_tool_authorized', False)}|{getattr(payload, 'science_tool_authorized', False)}")
+    request_hash = _hash(f"{course_version_id}|{lesson_version_id}|{payload.item_count}|{payload.difficulty}|{output_language}|{getattr(payload, 'item_type_mode', 'auto')}|{getattr(payload, 'code_languages', None)}|{getattr(payload, 'code_tool_authorized', False)}|{getattr(payload, 'science_tool_authorized', False)}|{CURRENT_ARTIFACT_CONTRACT}")
     compatible_hashes = {request_hash}
     if not getattr(payload, "code_tool_authorized", False) and not getattr(payload, "science_tool_authorized", False):
         compatible_hashes.add(legacy_request_hash)
@@ -172,6 +199,7 @@ def create_generation_job(db: Session, settings: Settings, workspace_id: str, co
             attempt_count=0, external_processing_ack_at=_now(),
             item_type_mode=getattr(payload, 'item_type_mode', 'auto'),
             code_languages=getattr(payload, 'code_languages', None),
+            artifact_contract_version=CURRENT_ARTIFACT_CONTRACT,
         )
         db.add(job)
         db.flush()
@@ -405,6 +433,7 @@ def _submit_short_answer(db: Session, settings: Settings, workspace_id: str, ite
         output_language=item.item_type and "zh-CN", difficulty="standard", item_count=1,
         request_hash=_hash(f"grade|{attempt.id}"), status="queued", idempotency_key=f"grade-{attempt.id}",
         attempt_count=0, external_processing_ack_at=_now(),
+        artifact_contract_version=_artifact_version_for_item(db, item),
     )
     # Preserve the item's language on the grading job for consistent feedback.
     practice_set = db.get(PracticeSet, item.practice_set_id)
@@ -467,6 +496,7 @@ def _submit_coding(db: Session, settings: Settings, workspace_id: str, item: Pra
         output_language="zh-CN", difficulty="standard", item_count=1,
         request_hash=_hash(f"grade|{attempt.id}"), status="queued", idempotency_key=f"grade-{attempt.id}",
         attempt_count=0, external_processing_ack_at=_now(),
+        artifact_contract_version=_artifact_version_for_item(db, item),
     )
     # Preserve the item's language on the grading job for consistent feedback.
     practice_set = db.get(PracticeSet, item.practice_set_id)
@@ -697,6 +727,7 @@ def cleanup_set(db: Session, set_id: str) -> bool:
         db.execute(delete(PracticeAttempt).where(PracticeAttempt.id.in_(attempt_ids)))
     if item_ids:
         db.execute(delete(PracticeItemCitation).where(PracticeItemCitation.practice_item_id.in_(item_ids)))
+        db.execute(delete(PracticeItemTarget).where(PracticeItemTarget.practice_item_id.in_(item_ids)))
     db.execute(delete(PracticeItem).where(PracticeItem.practice_set_id == set_id))
     if job_ids:
         db.execute(delete(PracticeJobSource).where(PracticeJobSource.practice_job_id.in_(job_ids)))

@@ -57,11 +57,16 @@ def test_practice_type_rejection_has_actionable_public_message() -> None:
     assert "科学计算题" in PRACTICE_ERROR_MESSAGES["science_item_not_supported_by_lesson"]
 
 
-def test_integrated_practice_uses_separate_attempt_step_budget() -> None:
+def test_integrated_practice_uses_unified_step_budget() -> None:
+    """Slice 5 (Spec 005 §7.2 / ADR 007 §3.6) collapses the old dual denomination
+    (eval 6-step vs runtime 20-step) and the dead per-item ref-call setting into
+    one authoritative budget: 4 provider calls, 3 searches, 12 attempt steps."""
     settings = Settings()
-    assert settings.practice_generation_max_provider_calls == 6
+    assert settings.practice_generation_max_provider_calls == 4
     assert settings.practice_generation_max_searches == 3
-    assert settings.practice_generation_max_attempt_steps == 20
+    assert settings.practice_generation_max_attempt_steps == 12
+    assert not hasattr(settings, "practice_generation_max_steps")
+    assert not hasattr(settings, "practice_coding_max_ref_calls")
 
 
 def test_invalid_artifact_is_not_retried_with_the_same_inputs() -> None:
@@ -354,7 +359,9 @@ def test_practice_novelty_rejects_spacing_and_punctuation_repeat() -> None:
         ],
     )
     with pytest.raises(ValueError, match="duplicate_practice_item"):
-        _validate_practice_novelty(SimpleNamespace(items=[item]), ("What is Dijkstra’s invariant",))
+        # Slice 5: novelty now takes (target_key, item_type, stem) prior tuples
+        # so near-duplicate detection can be scoped by target/type/task signature.
+        _validate_practice_novelty(SimpleNamespace(items=[item]), (("objective_1", "single_choice", "What is Dijkstra’s invariant"),))
 
 
 @pytest.mark.parametrize(
@@ -521,7 +528,7 @@ def test_failed_coding_reference_never_persists_a_set(db_session, monkeypatch) -
         (artifact, {}),
         (artifact, {}),
     ])
-    monkeypatch.setattr(practice_generation, "call_provider", lambda *_args, **_kwargs: next(provider_results))
+    monkeypatch.setattr(practice_generation, "call_practice_provider", lambda *_args, **_kwargs: next(provider_results))
     monkeypatch.setattr(
         practice_generation,
         "_validate_coding_reference_via_mcp",
@@ -534,7 +541,12 @@ def test_failed_coding_reference_never_persists_a_set(db_session, monkeypatch) -
         ),
     )
 
-    with pytest.raises(ValueError, match="coding_reference_validation_failed"):
+    # Per Correction 002 §D: when the repair also fails (either the DTO is
+    # malformed or re-validation fails), the stable error code is
+    # coding_repair_artifact_invalid or coding_repair_revalidation_failed,
+    # NOT coding_reference_test_failed. The key invariant (zero Set/Item
+    # persisted) still holds.
+    with pytest.raises(ValueError, match="coding_repair_artifact_invalid|coding_repair_revalidation_failed|coding_reference_test_failed"):
         practice_generation.execute_generation(
             db_session,
             get_settings(),

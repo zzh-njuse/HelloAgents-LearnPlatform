@@ -1,5 +1,5 @@
 import { ArrowLeft, ChevronLeft, ChevronRight, ClipboardList, Eye, EyeOff, ListChecks, LoaderCircle, Maximize2, Minimize2, Play, Plus, RefreshCw, Send, Sparkles, Square, Terminal, Trash2 } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   cancelPracticeJob, CourseReader, createPracticeSet, deletePracticeSet, fetchPracticeAttempt, fetchPracticeAttempts, fetchPracticeJob,
@@ -18,7 +18,16 @@ const verdictLabel = (verdict: string) => ({ correct: "正确", partially_correc
 type Drafts = Record<string, { option_key?: string; text?: string; source_code?: string; ack: boolean }>;
 
 const wrapPracticeSource = (language: "python" | "java" | "cpp", source: string) => {
-  if (language === "java") return `${source}\nclass Main { public static void main(String[] args) throws Exception { String input = new String(System.in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8); System.out.print(Solution.solve(input)); } }`;
+  if (language === "java") {
+    // Task E: strip `public` (and `public final`) from `class Solution` so the
+    // product-generated `class Main` compiles alongside it in Main.java. This
+    // handles `public class Solution`, `public final class Solution`, and
+    // bare `class Solution`. The regex only matches the class declaration,
+    // not occurrences inside strings or comments (it requires the token to
+    // appear at the start of a line, preceded only by whitespace).
+    const normalized = source.replace(/^(\s*)(public\s+)?(final\s+)?class\s+Solution\b/gm, "$1class Solution");
+    return `${normalized}\nclass Main { public static void main(String[] args) throws Exception { String input = new String(System.in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8); System.out.print(Solution.solve(input)); } }`;
+  }
   if (language === "cpp") return `#include <iostream>\n#include <iterator>\n#include <string>\n${source}\nint main() { std::string input((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>()); std::cout << solve(input); }`;
   return `${source}\n\nif __name__ == "__main__":\n    import sys\n    result = solve(sys.stdin.read())\n    if result is not None:\n        print(result, end="")`;
 };
@@ -58,6 +67,17 @@ export function PracticePanel({ workspaceId, reader, lessonId, onLessonId, setId
   const [codeFocused, setCodeFocused] = useState(false);
   const [scratchInputs, setScratchInputs] = useState<Record<string, string>>({});
   const [scratchRun, setScratchRun] = useState<CodeRunDetail | null>(null);
+  const [scratchRunItemId, setScratchRunItemId] = useState<string | null>(null);
+  // Task D §3/§4: snapshot of the (source_code, stdin) that produced the current
+  // scratchRun. When the user edits source or stdin, the snapshot no longer
+  // matches and the stale result is cleared. Late responses whose snapshot
+  // doesn't match the current input are discarded.
+  const [scratchRunInputSnapshot, setScratchRunInputSnapshot] = useState<string | null>(null);
+  // Ref to track the current run's token for late-response discard. Each
+  // invocation of runCurrentCode generates a unique token; if the user
+  // changes inputs or switches items before the response arrives, the token
+  // no longer matches and the response is silently dropped.
+  const scratchRunTokenRef = useRef<string | null>(null);
   const [scratchBusy, setScratchBusy] = useState(false);
   const [codeExecutionEnabled, setCodeExecutionEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -181,10 +201,10 @@ export function PracticePanel({ workspaceId, reader, lessonId, onLessonId, setId
       for (const item of pending) {
         const draft = drafts[item.id];
         const attempt = await submitPracticeAttempt(workspaceId, item.id, item.item_type === "single_choice"
-          ? { external_processing_ack: false, option_key: draft.option_key }
+          ? { external_processing_ack: false, option_key: draft?.option_key }
           : item.item_type === "coding"
-            ? { external_processing_ack: true, source_code: (draft.source_code ?? item.interaction_spec?.starter_code ?? "").slice(0, 20000) }
-            : { external_processing_ack: true, science_tool_authorized: item.item_type === "scientific", text: draft.text!.slice(0, 8000) });
+            ? { external_processing_ack: true, source_code: (draft?.source_code ?? item.interaction_spec?.starter_code ?? "").slice(0, 20000) }
+            : { external_processing_ack: true, science_tool_authorized: item.item_type === "scientific", text: (draft?.text ?? "").slice(0, 8000) });
         setAttempts((current) => ({ ...current, [item.id]: [attempt, ...(current[item.id] ?? [])] }));
       }
       setSubmissionAck(false);
@@ -236,6 +256,50 @@ export function PracticePanel({ workspaceId, reader, lessonId, onLessonId, setId
   const historicalSet = Boolean(selectedSet && selectedLesson && selectedSet.lesson_version_id !== selectedLesson.version.id);
   const readOnly = sourceDegraded; // source_degraded is fully read-only for practice
 
+  // Task C: auto-exit coding focus when context changes (item type, set, lesson)
+  useEffect(() => {
+    if (codeFocused && currentItem && currentItem.item_type !== "coding") setCodeFocused(false);
+  }, [codeFocused, currentItem?.item_type]);
+  useEffect(() => {
+    if (codeFocused) setCodeFocused(false);
+  }, [selectedSet?.id, lessonId]);
+
+  // Task D: clear stale scratchRun results when the current item changes.
+  // The result belongs to the item that initiated the run; switching items
+  // must not show the old item's output.
+  useEffect(() => {
+    if (scratchRunItemId && currentItem && scratchRunItemId !== currentItem.id) {
+      setScratchRun(null);
+      setScratchRunItemId(null);
+      setScratchRunInputSnapshot(null);
+      scratchRunTokenRef.current = null;
+      setScratchBusy(false);
+    }
+  }, [currentItem?.id, scratchRunItemId]);
+
+  // Task D §3: clear stale scratchRun results when the source code or stdin
+  // for the current item changes. We compare the current input against the
+  // snapshot recorded at run initiation time. If they differ, the result is
+  // stale and must be cleared. This effect does NOT depend on scratchRun
+  // itself, so it won't clear a result immediately after runCurrentCode
+  // writes it.
+  // IMPORTANT: currentSourceCode must use the SAME fallback chain as
+  // runCurrentCode (draft ?? starter_code ?? ""), otherwise running
+  // unedited starter code would produce a snapshot mismatch that
+  // immediately clears the result.
+  const currentScratchInput = currentItem ? scratchInputs[currentItem.id] : undefined;
+  const currentSourceCode = currentItem ? (drafts[currentItem.id]?.source_code ?? currentItem.interaction_spec?.starter_code ?? "") : undefined;
+  const currentInputKey = currentItem ? `${currentItem.id}:${currentSourceCode ?? ""}:${currentScratchInput ?? ""}` : null;
+  useEffect(() => {
+    if (scratchRunItemId && scratchRunInputSnapshot !== null && currentInputKey !== scratchRunInputSnapshot) {
+      setScratchRun(null);
+      setScratchRunItemId(null);
+      setScratchRunInputSnapshot(null);
+      scratchRunTokenRef.current = null;
+      setScratchBusy(false);
+    }
+  }, [currentInputKey, scratchRunInputSnapshot, scratchRunItemId]);
+
   useEffect(() => {
     if (!codeFocused) return;
     const close = (event: KeyboardEvent) => { if (event.key === "Escape") setCodeFocused(false); };
@@ -247,7 +311,14 @@ export function PracticePanel({ workspaceId, reader, lessonId, onLessonId, setId
     if (!currentItem || currentItem.item_type !== "coding" || !selectedLesson) return;
     const sourceCode = drafts[currentItem.id]?.source_code ?? currentItem.interaction_spec?.starter_code ?? "";
     if (!sourceCode.trim()) return;
-    setScratchBusy(true); setError(null); setScratchRun(null);
+    // Task D §3/§4: record the input snapshot at run initiation so we can
+    // detect stale results later (user edited source/stdin, or late response
+    // from a previous run arrives after the user changed inputs).
+    const runItemId = currentItem.id;
+    const runInputSnapshot = `${runItemId}:${sourceCode}:${scratchInputs[currentItem.id] ?? ""}`;
+    const runToken = crypto.randomUUID();
+    scratchRunTokenRef.current = runToken;
+    setScratchBusy(true); setError(null); setScratchRun(null); setScratchRunItemId(runItemId); setScratchRunInputSnapshot(runInputSnapshot);
     try {
       const created = await createCodeRun(workspaceId, {
         language: currentItem.interaction_spec?.language ?? "python",
@@ -259,15 +330,19 @@ export function PracticePanel({ workspaceId, reader, lessonId, onLessonId, setId
         lesson_version_id: selectedLesson.version.id,
       }, crypto.randomUUID());
       let detail = await getCodeRun(workspaceId, created.id);
-      setScratchRun(detail);
+      // Task D §4: discard late response if a newer run has been initiated
+      if (scratchRunTokenRef.current === runToken) setScratchRun(detail);
       const terminal = ["completed", "compile_error", "runtime_error", "timed_out", "output_limited", "failed", "canceled"];
       for (let index = 0; index < 90 && !terminal.includes(detail.status); index += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
         detail = await getCodeRun(workspaceId, created.id);
-        setScratchRun(detail);
+        if (scratchRunTokenRef.current === runToken) setScratchRun(detail);
       }
-    } catch (value) { setError(errorMessage(value)); }
-    finally { setScratchBusy(false); }
+    } catch (value) {
+      if (scratchRunTokenRef.current === runToken) setError(errorMessage(value));
+    } finally {
+      if (scratchRunTokenRef.current === runToken) setScratchBusy(false);
+    }
   };
 
   return <section className="practice-panel" aria-label="课节练习">
@@ -281,7 +356,7 @@ export function PracticePanel({ workspaceId, reader, lessonId, onLessonId, setId
     {genJob ? <div className={`practice-job ${genJob.status === "failed" || genJob.status === "queue_failed" ? "failed" : ""}`} role="status">
       {ACTIVE.includes(genJob.status) ? <LoaderCircle className="spin" size={16} /> : null}
       <span>生成任务 · {reader.course.title} · {selectedLesson?.lesson.title ?? "课节"} · {itemCount} 题 · {genJob.status}</span>
-      {genJob.science_verification ? <ScienceVerificationStatus value={genJob.science_verification} /> : null}
+      {genJob.science_verification && genJob.science_verification.status !== "not_used" ? <ScienceVerificationStatus value={genJob.science_verification} /> : null}
       {genJob.error_message ? <small>{genJob.error_code === "coding_item_not_supported_by_lesson" ? "当前课节缺少可执行学习目标或代码证据，无法生成合适的编程题。请选择自动选择或普通题。" : genJob.error_code === "science_item_not_supported_by_lesson" ? "当前课节缺少可计算的数学、物理或化学目标与证据，无法生成合适的科学计算题。请选择自动选择或普通题。" : genJob.error_message}</small> : null}
       {ACTIVE.includes(genJob.status) && genJob.status !== "cancel_requested" ? <button className="secondary-button" disabled={busy} onClick={() => void actJob(() => cancelPracticeJob(workspaceId, genJob.id))} type="button"><Square size={14} />取消</button> : null}
       {["failed", "queue_failed", "canceled"].includes(genJob.status) ? <button className="secondary-button" disabled={busy} onClick={() => void actJob(() => retryPracticeJob(workspaceId, genJob.id))} type="button"><RefreshCw size={14} />重试</button> : null}
@@ -323,6 +398,7 @@ export function PracticePanel({ workspaceId, reader, lessonId, onLessonId, setId
         <div className="practice-code-toolbar">
           <div><Terminal size={16} /><strong>{currentItem.interaction_spec?.language === "cpp" ? "C++" : currentItem.interaction_spec?.language === "java" ? "Java" : "Python"}</strong><span>隔离运行 · {currentItem.interaction_spec?.time_limit_seconds ?? 3}s</span></div>
           <button className="icon-button" onClick={() => setCodeFocused((value) => !value)} title={codeFocused ? "退出专注编码" : "专注编码"} type="button">{codeFocused ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button>
+          {codeFocused ? <button className="secondary-button practice-exit-focus" onClick={() => setCodeFocused(false)} type="button"><Minimize2 size={15} />退出专注</button> : null}
         </div>
         <div className="practice-code-contract">
           <p><strong>输入</strong>{currentItem.interaction_spec?.input_description ?? "标准输入将作为 UTF-8 字符串传给 solve(input_text)"}</p>
@@ -334,12 +410,12 @@ export function PracticePanel({ workspaceId, reader, lessonId, onLessonId, setId
           <label className="source-choice code-execution-policy"><input checked={codeExecutionEnabled} disabled={busy || readOnly} onChange={(event) => void changeCodeExecutionPolicy(event.target.checked)} type="checkbox" />允许此工作区将代码发送到自托管隔离执行环境</label>
           <label><span>自测输入 <small>不会作为正式答案提交</small></span><textarea className="stdin-editor" value={scratchInputs[currentItem.id] ?? ""} onChange={(event) => setScratchInputs((current) => ({ ...current, [currentItem.id]: event.target.value }))} placeholder="输入一组用于试运行的数据" rows={3} /></label>
           <div className="practice-code-run-row"><button className="secondary-button" disabled={!codeExecutionEnabled || scratchBusy || busy || readOnly} onClick={() => void runCurrentCode()} type="button">{scratchBusy ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}试运行</button><small>{codeExecutionEnabled ? "正式交卷后还会运行 3-20 个隐藏用例，并由 AI 结合代码与测试摘要讲解。" : "先启用当前工作区的自托管代码执行，才能试运行。"}</small></div>
-          {scratchRun ? <div className={`practice-code-output ${scratchRun.status}`}><header><strong>运行结果</strong><span>{scratchRun.status}</span></header>{scratchRun.compile_output ? <pre>{scratchRun.compile_output}</pre> : null}{scratchRun.stdout ? <pre>{scratchRun.stdout}</pre> : null}{scratchRun.stderr ? <pre className="error-output">{scratchRun.stderr}</pre> : null}</div> : null}
+          {scratchRun && scratchRunItemId === currentItem.id ? <div className={`practice-code-output ${scratchRun.status}`}><header><strong>运行结果</strong><span>{scratchRun.status}</span></header>{scratchRun.compile_output ? <pre>{scratchRun.compile_output}</pre> : null}{scratchRun.stdout ? <pre>{scratchRun.stdout}</pre> : null}{scratchRun.stderr ? <pre className="error-output">{scratchRun.stderr}</pre> : null}</div> : null}
         </div>
         {currentItem.interaction_spec?.public_examples?.length ? <div className="practice-public-cases"><strong>公开示例</strong>{currentItem.interaction_spec.public_examples.map((example, index) => <pre key={index}>输入：{example.input}{"\n"}输出：{example.expected_output}</pre>)}</div> : null}
       </div> : <textarea className="practice-textarea" disabled={busy || readOnly || currentSubmitted} maxLength={8000} onChange={(event) => setDrafts((current) => ({ ...current, [currentItem.id]: { ...current[currentItem.id], text: event.target.value } }))} placeholder={currentItem.item_type === "scientific" ? `写出完整解答过程：公式、推导、代入、单位与最终结论${currentItem.interaction_spec?.unit ? `（目标单位：${currentItem.interaction_spec.unit}）` : ""}` : "输入简答（最多 8000 字符）"} rows={8} value={answersHidden ? "" : drafts[currentItem.id]?.text ?? ""} />}
 
-      <div className="practice-actions">
+      <div className={`practice-actions${codeFocused ? " practice-actions-hidden" : ""}`}>
         <button className="icon-button" disabled={currentOrdinal <= 0} onClick={() => setCurrentOrdinal((value) => value - 1)} title="上一题" type="button"><ChevronLeft size={18} /></button>
         <button className="icon-button" disabled={currentOrdinal >= items.length - 1} onClick={() => setCurrentOrdinal((value) => value + 1)} title="下一题" type="button"><ChevronRight size={18} /></button>
         {currentOrdinal === items.length - 1 ? <button className="primary-button" disabled={busy || readOnly || (pendingShortAnswer && !submissionAck)} onClick={() => void submitPaper()} type="button">{busy ? <LoaderCircle className="spin" size={15} /> : <Send size={15} />}交卷</button> : null}
@@ -359,11 +435,14 @@ export function PracticePanel({ workspaceId, reader, lessonId, onLessonId, setId
 type FeedbackCitation = { citation_key: string; document_name: string; heading_path: string[]; page_start: number | null; page_end: number | null };
 
 function ScienceVerificationStatus({ value }: { value: ScienceVerificationRead }) {
+  // Task A: only render for verified/failed states; not_used is filtered at
+  // the call site. Labels use Set-level wording ("生成" not "本题").
   const label = value.status === "verified"
     ? "Wolfram 已完成验证"
     : value.status === "failed"
       ? "Wolfram 验证失败"
-      : "本题未调用 Wolfram";
+      : null;
+  if (!label) return null;
   const purpose = value.purpose === "reference_answer" ? "参考答案" : "学生最终结果";
   return <div className={`science-verification-status ${value.status}`} role="status"><strong>{label}</strong><span>用途：{purpose}</span>{value.checked_at ? <time dateTime={value.checked_at}>{new Date(value.checked_at).toLocaleString("zh-CN")}</time> : null}</div>;
 }

@@ -1,6 +1,6 @@
 # Platform Stage 4：练习、记忆与复习闭环
 
-状态：Slice 1/2/3/4 已完成；新增计划外 Slice 5 负责练习生成与评分链路稳定化，等待 Spec/ADR Gate
+状态：Slice 1/2/3/4/5 已完成；Stage 4 已于 2026-07-24 完成自动化、OCR 与人工 smoke 并归档
 
 Stage 4 的目标是让用户在课程学习之后完成练习和作答，获得有引用依据的反馈，并将可解释的薄弱点形成可管理的复习队列。任何 schema、生成 Agent、评分、掌握度或长期 Memory 实现，都必须先经过本阶段 Spec/ADR 和人工 Gate。
 
@@ -8,6 +8,7 @@ Stage 4 的目标是让用户在课程学习之后完成练习和作答，获得
 
 - [Stage 4 输入](STAGE_4_INPUTS.md)
 - [Stage 4 五切片方向计划](STAGE_4_SLICE_PLAN.md)
+- [Stage 4 过程复盘](STAGE_4_WORKING_RETROSPECTIVE.md)（持续维护，非最终复盘）
 - [Slice 1 练习与评分事实盘点](SLICE_1_PRACTICE_FACT_INVENTORY.md)
 - [Slice 1 前端概念与状态矩阵](SLICE_1_FRONTEND_CONCEPT.md)
 - [Slice 1 Spec：课节练习、作答与可信反馈](specs/001-lesson-practice-attempts-and-trustworthy-feedback.md)
@@ -46,6 +47,12 @@ Stage 4 的目标是让用户在课程学习之后完成练习和作答，获得
 - [Slice 4 完成总结](SLICE_4_SUMMARY.md)
 - [Slice 4 OCR 记录](reviews/2026-07-23-slice-4-ocr.md)
 - [Slice 5 输入：练习生成与评分链路稳定化](SLICE_5_INPUTS.md)
+- [Slice 5 练习稳定性事实盘点](SLICE_5_PRACTICE_STABILITY_FACT_INVENTORY.md)
+- [Spec 005：练习生成与评分链路稳定化](specs/005-practice-generation-and-grading-stability.md)（已接受）
+- [ADR 007：版本化练习 Artifact、分阶段验证与有限修复权威](adr/007-versioned-practice-artifact-validation-and-repair-authority.md)（已接受）
+- [Slice 5 GLM 基线诊断与实现任务包](SLICE_5_GLM_IMPLEMENTATION_PACKET.md)
+- [Slice 5 完成总结](SLICE_5_SUMMARY.md)
+- [Slice 5 OCR 记录](reviews/2026-07-24-slice-5-ocr.md)
 - [Slice 1 OCR 记录](reviews/2026-07-16-slice-1-ocr.md)
 - [Slice 2 OCR 记录](reviews/2026-07-17-slice-2-ocr.md)
 - [Stage 3 总结](../03-platform-stage-3-chapter-learning-and-tutor/STAGE_3_SUMMARY.md)

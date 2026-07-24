@@ -523,6 +523,10 @@ button { cursor: pointer; }
 .practice-code-focused { position: fixed; inset: 0; z-index: 82; display: block; overflow-y: auto; padding: 20px max(24px, calc((100vw - 1180px) / 2)) 60px; border: 0; border-radius: 0; background: #f1f4f1; }
 .practice-code-focused .practice-code-answer { padding: 16px; border: 1px solid #d4dcd6; background: #fff; }
 .practice-code-focused .practice-actions { position: sticky; bottom: 0; z-index: 2; padding: 10px 0; background: rgb(241 244 241 / 94%); backdrop-filter: blur(8px); }
+/* Task C: hide global practice-actions (prev/next/delete/submit) in coding focus mode
+   to prevent context-switching while focused on a single coding item. */
+.practice-actions-hidden { display: none !important; }
+.practice-exit-focus { margin-left: auto; }
 .coding-feedback-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 9px 10px; border: 1px solid #ccd8cf; border-radius: 4px; background: #f3f7f4; }
 .coding-feedback-summary span { color: #7c4e1b; font-size: 12px; }
 .coding-public-results { display: flex; gap: 7px; flex-wrap: wrap; }
